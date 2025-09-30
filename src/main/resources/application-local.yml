@@ -1,0 +1,94 @@
+server:
+  port: 8099
+
+app:
+  name: yo-sales
+
+spring:
+  cloud:
+    compatibility-verifier:
+      enabled: false
+  datasource:
+    url: jdbc:postgresql://54.38.35.221:5432/empire?currentSchema=payment_management
+    username: admin
+    password: eV03^a&T2W2E9r4xG0a^L&Yfc
+    driver-class-name: org.postgresql.Driver
+  jpa:
+    hibernate:
+      ddl-auto: update
+    show-sql: true
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+
+  security:
+    oauth2:
+      client:
+        registration:
+          keycloak:
+            client-id: yo-sales
+            client-secret: jZISUsw3TT8VWa52WuorGnsOdfaNXrtE
+            authorization-grant-type: password
+        provider:
+          keycloak:
+            token-uri: http://54.38.35.221:9081/realms/yo-sales/protocol/openid-connect/token
+            authorization-uri: http://54.38.35.221:9081/realms/yo-sales/protocol/openid-connect/auth
+            user-info-uri: http://54.38.35.221:9081/realms/yo-sales/protocol/openid-connect/userinfo
+            user-name-attribute: preferred_username
+      resourceserver:
+        jwt:
+          jwk-set-uri: http://54.38.35.221:9081/realms/yo-sales/protocol/openid-connect/certs
+          issuer-uri: http://54.38.35.221:9081/realms/yo-sales
+
+jwt:
+  auth:
+    converter:
+      resource-id: yo-sales
+      principle-attribute: preferred_username
+
+cors:
+  allowedOrigin: '*'
+  allowedMethods: '*'
+  allowedHeaders: '*'
+  allowedCredentials: false
+  corsConfiguration: '/**'
+
+
+feign:
+  documentManagement:
+    uri: http://54.38.35.221:8087
+  notification:
+    uri: http://localhost:8086
+# application.yml
+
+
+payment:
+  stripe:
+    secretKey: ${STRIPE_SECRET_KEY}           # sk_live_xxx ou sk_test_xxx
+    webhookSecret: ${STRIPE_WEBHOOK_SECRET}   # whsec_xxx
+    successUrl: ${STRIPE_SUCCESS_URL:http://localhost:4200/payment/success}
+    cancelUrl:  ${STRIPE_CANCEL_URL:http://localhost:4200/payment/cancel}
+
+  paypal:
+    clientId: ${PAYPAL_CLIENT_ID}
+    clientSecret: ${PAYPAL_CLIENT_SECRET}
+    mode: ${PAYPAL_MODE:sandbox}              # sandbox ou live
+    successUrl: ${PAYPAL_SUCCESS_URL:http://localhost:4200/payment/success}
+    cancelUrl:  ${PAYPAL_CANCEL_URL:http://localhost:4200/payment/cancel}
+
+  konnect:
+    baseUrl: ${KONNECT_BASE_URL:https://api.preprod.konnect.network/api/v2/}
+    apiKey: ${KONNECT_API_KEY}
+    walletId: ${KONNECT_WALLET_ID}
+    successUrl: ${KONNECT_SUCCESS_URL:https://localhost/payment-success}
+    failUrl: ${KONNECT_FAIL_URL:https://localhost:4200/payment-failure}
+
+#logging:
+#  level:
+#    org:
+#      springframework:
+#        kafka: DEBUG
+#      apache:
+#        kafka:
+#          clients:
+#            producer: DEBUG
