@@ -59,7 +59,26 @@ feign:
     uri: http://54.38.35.221:8087
   notification:
     uri: http://localhost:8086
+payment:
+  stripe:
+    secretKey: ${STRIPE_SECRET_KEY}           # sk_live_xxx ou sk_test_xxx
+    webhookSecret: ${STRIPE_WEBHOOK_SECRET}   # whsec_xxx
+    successUrl: ${STRIPE_SUCCESS_URL:http://localhost:4200/payment/success}
+    cancelUrl:  ${STRIPE_CANCEL_URL:http://localhost:4200/payment/cancel}
 
+  paypal:
+    clientId: ${PAYPAL_CLIENT_ID}
+    clientSecret: ${PAYPAL_CLIENT_SECRET}
+    mode: ${PAYPAL_MODE:sandbox}              # sandbox ou live
+    successUrl: ${PAYPAL_SUCCESS_URL:http://localhost:4200/payment/success}
+    cancelUrl:  ${PAYPAL_CANCEL_URL:http://localhost:4200/payment/cancel}
+
+  konnect:
+    baseUrl: ${KONNECT_BASE_URL:https://api.preprod.konnect.network/api/v2/}
+    apiKey: ${KONNECT_API_KEY}
+    walletId: ${KONNECT_WALLET_ID}
+    successUrl: ${KONNECT_SUCCESS_URL:https://localhost/payment-success}
+    failUrl: ${KONNECT_FAIL_URL:https://localhost:4200/payment-failure}
 #logging:
 #  level:
 #    org:
