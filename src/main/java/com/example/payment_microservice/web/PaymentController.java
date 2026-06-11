@@ -8,6 +8,7 @@ import com.example.payment_microservice.service.PaymentGatewayHandler;
 import com.example.payment_microservice.service.factory.PaymentGatewayFactory;
 
 import lombok.RequiredArgsConstructor;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
@@ -29,6 +30,20 @@ public class PaymentController {
             return ResponseEntity.ok(response);
         } catch (Exception e) {
             return ResponseEntity.badRequest().body(new PaymentResponseDto(null, null, "FAILED", e.getMessage()));
+        }
+    }
+    @GetMapping("/{invoiceId}/status-payment")
+    public ResponseEntity<Boolean> getStatusPayment(@PathVariable String invoiceId) {
+        try {
+            PaymentGatewayHandler handler = gatewayFactory.getHandler("FLOUCI");
+            Boolean response = handler.getPaymentStatusByInvoiceId(invoiceId);
+            return ResponseEntity.ok(response);
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND).build();
+        } catch (IllegalStateException e) {
+            return ResponseEntity.status(HttpStatus.BAD_GATEWAY).build();
+        } catch (Exception e) {
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).build();
         }
     }
     @PostMapping("/verify-credentials")

@@ -9,4 +9,7 @@ public interface PaymentGatewayHandler {
     PaymentResponseDto initiatePayment(PaymentRequestDto request) throws Exception;
     void handleWebhook(String paymentRef) throws Exception;
     Boolean verifyCredentials(Map<String, Object> credentials) throws Exception;
+    Boolean getPaymentStatusByInvoiceId(String invoiceId) throws Exception;
+
+
 }

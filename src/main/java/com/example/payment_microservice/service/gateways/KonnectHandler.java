@@ -309,6 +309,11 @@ public class KonnectHandler implements PaymentGatewayHandler {
         }
     }
 
+    @Override
+    public Boolean getPaymentStatusByInvoiceId(String invoiceId) throws Exception {
+        return null;
+    }
+
 
     /**
      * Get billing credentials from YoSales

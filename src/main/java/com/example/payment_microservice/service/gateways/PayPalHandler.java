@@ -415,6 +415,12 @@ public class PayPalHandler implements PaymentGatewayHandler {
             return false;
         }
     }
+
+    @Override
+    public Boolean getPaymentStatusByInvoiceId(String invoiceId) throws Exception {
+        return null;
+    }
+
     private Map<String, Object> getBillingCredentials(Long invoiceId) {
         return yosalesFeign.getBillingInfoByInvoiceIdAndGateway(
                 "Bearer " + tokenService.getServiceAccountToken(),

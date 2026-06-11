@@ -26,4 +26,5 @@ public class PaymentRequestDto {
     private String succesUrl;
     private String failUrl;
     private String brandName;
+    private String brandLogo;
 }

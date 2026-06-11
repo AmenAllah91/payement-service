@@ -6,6 +6,7 @@ import com.example.payment_microservice.repositories.PaymentTransactionRepositor
 import com.example.payment_microservice.service.PaymentGatewayHandler;
 import com.example.payment_microservice.service.TokenService;
 import com.example.payment_microservice.service.factory.PaymentGatewayFactory;
+import com.example.payment_microservice.service.gateways.FlouciHandler;
 import com.example.payment_microservice.service.gateways.PayPalHandler;
 import com.example.payment_microservice.service.gateways.StripeHandler;
 import com.paypal.orders.Order;
@@ -107,6 +108,38 @@ public class WebhookController {
             return ResponseEntity.ok("OK");
         }
     }
+    @GetMapping("/{productId}/flouci")
+    public ResponseEntity<?> handleFlouciRedirect(
+            @PathVariable Long productId,
+            @RequestParam("payment_id") String paymentId) {
+
+        try {
+            log.info("Flouci redirect webhook: productId={}, paymentId={}", productId, paymentId);
+            PaymentGatewayHandler handler = gatewayFactory.getHandler("FLOUCI");
+            
+            if (handler instanceof FlouciHandler) {
+                ((FlouciHandler) handler).handleWebhookSync(paymentId);
+            } else {
+                handler.handleWebhook(paymentId);
+            }
+
+            Optional<PaymentTransaction> txOpt = paymentTransactionRepository.findByTransactionId(paymentId);
+            if (txOpt.isPresent()) {
+                PaymentTransaction tx = txOpt.get();
+                if ("COMPLETED".equals(tx.getStatus())) {
+                    return redirectToFrontend("/payment/success?invoiceId=" + tx.getInvoiceId());
+                } else {
+                    return redirectToFrontend("/payment/failed?error=not_completed");
+                }
+            }
+            return redirectToFrontend("/payment/failed?error=transaction_not_found");
+
+        } catch (Exception e) {
+            log.error("Flouci redirect handler error", e);
+            return redirectToFrontend("/payment/failed?error=server_error");
+        }
+    }
+
     /**
      * PayPal return URL handler - captures order after user approval (v2)
      */

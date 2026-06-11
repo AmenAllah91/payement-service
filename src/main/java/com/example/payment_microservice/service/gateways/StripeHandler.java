@@ -360,6 +360,11 @@ public class StripeHandler implements PaymentGatewayHandler {
         }
     }
 
+    @Override
+    public Boolean getPaymentStatusByInvoiceId(String invoiceId) throws Exception {
+        return null;
+    }
+
     public boolean verifyWebhookSignature(String payload, String signature, String webhookSecret) {
         try {
             Webhook.constructEvent(payload, signature, webhookSecret);

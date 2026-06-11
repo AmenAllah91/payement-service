@@ -80,6 +80,9 @@ payment:
   stripe:
     mode: live
 
+  flouci:
+    baseUrl: https://developers.flouci.com/api/v2
+
 
 
 
