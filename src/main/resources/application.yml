@@ -63,9 +63,9 @@ feign:
   documentManagement:
     uri: http://54.38.35.221:8087
   notification:
-    uri: http://localhost:8086
+    uri: http://localhost:8086 # a changer
   yosales:
-    uri: http://localhost:8071
+    uri: https://integration.yosales.co # a changer
 # application.yml
 
 
