@@ -2,6 +2,7 @@ package com.example.payment_microservice.dto;
 
 import lombok.AllArgsConstructor;
 import lombok.Data;
+
 @Data
 @AllArgsConstructor
 public class PaymentResponseDto {
@@ -10,4 +11,3 @@ public class PaymentResponseDto {
     private String status;
     private String message;
 }
-

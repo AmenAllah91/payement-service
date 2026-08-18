@@ -14,7 +14,6 @@ public class PaymentProperties {
   private final Stripe stripe = new Stripe();
   private final Paypal paypal = new Paypal();
   private final Konnect konnect = new Konnect();
-  private final Flouci flouci = new Flouci();
 
   @Data public static class Stripe {
     private String secretKey;
@@ -35,8 +34,5 @@ public class PaymentProperties {
     private String walletId;
     private String successUrl;
     private String failUrl;
-  }
-  @Data public static class Flouci {
-    private String baseUrl = "https://developers.flouci.com/api/v2";
   }
 }
