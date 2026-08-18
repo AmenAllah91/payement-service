@@ -18,13 +18,5 @@ public class PaymentRequestDto {
     private String clientSecret;
     private String apiKey;
     private String walletId;
-    private String webhookUrl;
-    private String webhookSecret;
-    private String webhookId;
-    private Long invoiceId;
-    private Long paymentId;
-    private String succesUrl;
-    private String failUrl;
-    private String brandName;
-    private String brandLogo;
+
 }

@@ -19,8 +19,7 @@ import static org.springframework.security.config.http.SessionCreationPolicy.STA
 @EnableMethodSecurity(securedEnabled = true)
 @RequiredArgsConstructor
 public class SecurityConfig {
-
-    private final JwtAuthConverter jwtAuthConverter;
+    private  JwtAuthConverter jwtAuthConverter;
 
     @Value("${cors.allowedMethods}")
     private String allowedMethods;
@@ -32,20 +31,16 @@ public class SecurityConfig {
     private String corsConfiguration;
 
     @Bean
-    public WebMvcConfigurer corsConfigurer() {
-        return new WebMvcConfigurer() {
-            public void addCorsMappings(final CorsRegistry registry) {
-                registry.addMapping(corsConfiguration)
-                        .allowedHeaders(allowedHeaders.split(","))
-                        .allowedMethods(allowedMethods.split(","));
+    public WebMvcConfigurer corsConfigurer(){
+        return new WebMvcConfigurer(){
+            public void addCorsMappings(final CorsRegistry registry){
+                registry.addMapping(corsConfiguration).allowedHeaders(allowedHeaders).allowedMethods(allowedMethods);
             }
         };
     }
-
     @Bean
     public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
         http
-                .cors(withDefaults()) // ✅ Enables CORS support
                 .csrf().disable()
                 .sessionManagement()
                 .sessionCreationPolicy(STATELESS)
@@ -53,25 +48,20 @@ public class SecurityConfig {
                 .oauth2ResourceServer()
                 .jwt()
                 .jwtAuthenticationConverter(jwtAuthConverter);
-
         http
+                .oauth2Client()
+                .and()
                 .authorizeHttpRequests()
-                .requestMatchers(
-                        "/api/webhooks/**", // ✅ public webhook
-                        "/unauthenticated",
-                        "/oauth2/**",
-                        "/index.html",
-                        "/v3/api-docs/**",
-                        "/swagger-ui/**",
-                        "/swagger-ui/index.html",
-                        "/api/user/register"
-                ).permitAll()
-                .anyRequest().authenticated()
+                .requestMatchers("/unauthenticated", "/oauth2/**", "/index.html", "/v3/api-docs/**" ,"/swagger-ui/**" , "/swagger-ui/index.html" ,"/public/register" )
+                .permitAll()
+                .anyRequest()
+                .authenticated()
                 .and()
                 .oauth2Login(withDefaults())
                 .logout()
                 .logoutSuccessUrl("http://localhost:9081/realms/coach-app/protocol/openid-connect/logout?redirect_uri=http://localhost:8080/");
-
         return http.build();
     }
 }
+
+
