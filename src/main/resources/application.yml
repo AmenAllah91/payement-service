@@ -2,7 +2,11 @@ server:
   port: 8099
 
 app:
-  name: yo-sales
+  name: payment-ms
+  realm: yo-sales
+  client-id: payment-ms
+  client-secret: JfSiRh5NykLVHdnXUJKADguO3Uz73s4X
+  kc-host: https://login-int.yogym.co
 
 spring:
   cloud:
@@ -26,25 +30,26 @@ spring:
       client:
         registration:
           keycloak:
-            client-id: yo-sales
-            client-secret: jZISUsw3TT8VWa52WuorGnsOdfaNXrtE
+            client-id: payment-ms
+            client-secret: JfSiRh5NykLVHdnXUJKADguO3Uz73s4X
             authorization-grant-type: password
         provider:
           keycloak:
-            token-uri: http://54.38.35.221:9081/realms/yo-sales/protocol/openid-connect/token
-            authorization-uri: http://54.38.35.221:9081/realms/yo-sales/protocol/openid-connect/auth
-            user-info-uri: http://54.38.35.221:9081/realms/yo-sales/protocol/openid-connect/userinfo
+            token-uri: https://login-int.yogym.co/realms/yo-sales/protocol/openid-connect/token
+            authorization-uri: https://login-int.yogym.co/realms/yo-sales/protocol/openid-connect/auth
+            user-info-uri: https://login-int.yogym.co/realms/yo-sales/protocol/openid-connect/userinfo
             user-name-attribute: preferred_username
       resourceserver:
         jwt:
-          jwk-set-uri: http://54.38.35.221:9081/realms/yo-sales/protocol/openid-connect/certs
-          issuer-uri: http://54.38.35.221:9081/realms/yo-sales
+          jwk-set-uri: https://login-int.yogym.co/realms/yo-sales/protocol/openid-connect/certs
+          issuer-uri: https://login-int.yogym.co/realms/yo-sales
 
 jwt:
   auth:
     converter:
-      resource-id: yo-sales
+      resource-id: payment-ms
       principle-attribute: preferred_username
+
 
 cors:
   allowedOrigin: '*'
@@ -59,26 +64,29 @@ feign:
     uri: http://54.38.35.221:8087
   notification:
     uri: http://localhost:8086
+  yosales:
+    uri: http://localhost:8071
+# application.yml
+
+
 payment:
-  stripe:
-    secretKey: ${STRIPE_SECRET_KEY}           # sk_live_xxx ou sk_test_xxx
-    webhookSecret: ${STRIPE_WEBHOOK_SECRET}   # whsec_xxx
-    successUrl: ${STRIPE_SUCCESS_URL:http://localhost:4200/payment/success}
-    cancelUrl:  ${STRIPE_CANCEL_URL:http://localhost:4200/payment/cancel}
+  konnect:
+    baseUrl: https://api.konnect.network/api/v2/
+
 
   paypal:
-    clientId: ${PAYPAL_CLIENT_ID}
-    clientSecret: ${PAYPAL_CLIENT_SECRET}
-    mode: ${PAYPAL_MODE:sandbox}              # sandbox ou live
-    successUrl: ${PAYPAL_SUCCESS_URL:http://localhost:4200/payment/success}
-    cancelUrl:  ${PAYPAL_CANCEL_URL:http://localhost:4200/payment/cancel}
+    mode: live
 
-  konnect:
-    baseUrl: ${KONNECT_BASE_URL:https://api.preprod.konnect.network/api/v2/}
-    apiKey: ${KONNECT_API_KEY}
-    walletId: ${KONNECT_WALLET_ID}
-    successUrl: ${KONNECT_SUCCESS_URL:https://localhost/payment-success}
-    failUrl: ${KONNECT_FAIL_URL:https://localhost:4200/payment-failure}
+  stripe:
+    mode: live
+
+  flouci:
+    baseUrl: https://developers.flouci.com/api/v2
+
+
+
+
+
 #logging:
 #  level:
 #    org:
