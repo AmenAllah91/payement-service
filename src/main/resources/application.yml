@@ -70,6 +70,7 @@ feign:
 
 
 payment:
+  webhook-url: https://postpuberty-trigonometric-bev.ngrok-free.dev
   konnect:
     baseUrl: https://api.konnect.network/api/v2/
 
