@@ -16,50 +16,38 @@ pipeline {
 
     environment {
         DOCKER_IMAGE = 'kamdigisdocker/payment-service'
-        IMAGE_TAG = 'integ'
+        IMAGE_TAG = 'prod'
         SERVICE_NAME = 'payment-service'
-
-        USER_CREDENTIALS = credentials('jenkins-docker')
-
-        VPS_USER = credentials('integration-vps')
-        VPS_IP = '54.38.35.221'
+        USER_CREDENTIALS= credentials('jenkins-docker')
+        VPS_USER = credentials('production-vps')
+        VPS_IP = '51.178.55.238'
     }
 
     stages {
-
         stage('Build docker image') {
             steps {
-                sh '''
-                    docker build -t $DOCKER_IMAGE:$IMAGE_TAG .
-                '''
+                sh 'docker build -t $DOCKER_IMAGE:$IMAGE_TAG .'
             }
         }
-
         stage('Push docker image') {
             steps {
-                sh '''
-                    docker login -u ${USER_CREDENTIALS_USR} -p ${USER_CREDENTIALS_PSW} docker.io
-                    docker push $DOCKER_IMAGE:$IMAGE_TAG
-                '''
+                sh "docker login -u ${USER_CREDENTIALS_USR} -p ${USER_CREDENTIALS_PSW} docker.io"
+                sh 'docker push $DOCKER_IMAGE:$IMAGE_TAG'
             }
         }
-
         stage('Perform Service Update') {
-            steps {
-                sshCommand remote: [
-                    name: 'remote-vm',
-                    host: "${VPS_IP}",
-                    user: "${VPS_USER_USR}",
-                    password: "${VPS_USER_PSW}",
-                    allowAnyHosts: true
-                ],
-                command: """
-                    cd workspace &&
-                    sudo docker-compose pull ${SERVICE_NAME} &&
-                    sudo docker-compose down ${SERVICE_NAME} &&
-                    sudo docker-compose up -d ${SERVICE_NAME}
-                """
-            }
-        }
+                    steps {
+                        sshCommand remote: [
+                          name: 'remote-vm',
+                          host: "${VPS_IP}",
+                          user: "${VPS_USER_USR}",
+                          password: "${VPS_USER_PSW}",
+                          allowAnyHosts: true
+                        ], command: """
+                          echo ${USER_CREDENTIALS_PSW} | docker login -u ${USER_CREDENTIALS_USR} --password-stdin
+                          cd workspace-yocoach && docker compose pull ${SERVICE_NAME} && docker compose down ${SERVICE_NAME} && docker compose up -d ${SERVICE_NAME}
+                        """
+                    }
+                }
     }
 }

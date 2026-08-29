@@ -5,15 +5,16 @@ app:
   name: payment-ms
   realm: yo-sales
   client-id: payment-ms
-  client-secret: JfSiRh5NykLVHdnXUJKADguO3Uz73s4X
-  kc-host: https://login-int.yogym.co
+  client-secret: S5afHPlulEzP6tU102vEbGpP2vnDfkM8
+  kc-host: https://login.yosales.co
+  server-ip: "51.178.55.238"
 
 spring:
   cloud:
     compatibility-verifier:
       enabled: false
   datasource:
-    url: jdbc:postgresql://54.38.35.221:5432/empire?currentSchema=payment_management
+    url: jdbc:postgresql://${app.server-ip}:5432/empire?currentSchema=payment_management
     username: admin
     password: eV03^a&T2W2E9r4xG0a^L&Yfc
     driver-class-name: org.postgresql.Driver
@@ -35,14 +36,14 @@ spring:
             authorization-grant-type: password
         provider:
           keycloak:
-            token-uri: https://login-int.yogym.co/realms/yo-sales/protocol/openid-connect/token
-            authorization-uri: https://login-int.yogym.co/realms/yo-sales/protocol/openid-connect/auth
-            user-info-uri: https://login-int.yogym.co/realms/yo-sales/protocol/openid-connect/userinfo
+            token-uri: https://login.yosales.co/realms/yo-sales/protocol/openid-connect/token
+            authorization-uri: https://login.yosales.co/realms/yo-sales/protocol/openid-connect/auth
+            user-info-uri: https://login.yosales.co/realms/yo-sales/protocol/openid-connect/userinfo
             user-name-attribute: preferred_username
       resourceserver:
         jwt:
-          jwk-set-uri: https://login-int.yogym.co/realms/yo-sales/protocol/openid-connect/certs
-          issuer-uri: https://login-int.yogym.co/realms/yo-sales
+          jwk-set-uri: https://login.yosales.co/realms/yo-sales/protocol/openid-connect/certs
+          issuer-uri: https://login.yosales.co/realms/yo-sales
 
 jwt:
   auth:
@@ -61,9 +62,9 @@ cors:
 
 feign:
   documentManagement:
-    uri: http://54.38.35.221:8087
+    uri: http://${app.server-ip}:8087
   notification:
-    uri: http://localhost:8086 # a changer
+    uri: http://${app.server-ip}:8086 # a changer
   yosales:
     uri: https://integration.yosales.co # a changer
 # application.yml
