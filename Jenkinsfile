@@ -54,7 +54,7 @@ pipeline {
                     allowAnyHosts: true
                 ],
                 command: """
-                    cd workspace &&
+                    cd workspace-yosales &&
                     sudo docker-compose pull ${SERVICE_NAME} &&
                     sudo docker-compose down ${SERVICE_NAME} &&
                     sudo docker-compose up -d ${SERVICE_NAME}
