@@ -11,5 +11,13 @@ public interface PaymentGatewayHandler {
     Boolean verifyCredentials(Map<String, Object> credentials) throws Exception;
     Boolean getPaymentStatusByInvoiceId(String invoiceId) throws Exception;
 
+    /**
+     * SUB-52: asks the gateway for the real state of a transaction, applies it (confirmation sent to YoSales) and
+     * returns the state of the transaction: COMPLETED, FAILED, REJECTED, VERIFIED or PENDING.
+     */
+    default String reconcile(String transactionId) throws Exception {
+        return Boolean.TRUE.equals(getPaymentStatusByInvoiceId(transactionId)) ? "COMPLETED" : "PENDING";
+    }
+
 
 }

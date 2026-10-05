@@ -3,6 +3,8 @@ server:
 
 app:
   name: payment-ms
+  # SUB-10: YoCoach front-end where the coach lands after a Flouci payment
+  frontend-url: ${APP_FRONTEND_URL:http://localhost:4200}
   realm: yo-sales
   client-id: payment-ms
   client-secret: JfSiRh5NykLVHdnXUJKADguO3Uz73s4X
