@@ -35,6 +35,10 @@ public class WebhookController {
     private final PaymentTransactionRepository paymentTransactionRepository;
     private final TokenService tokenService;
 
+    /** Where the coach lands after paying (was hard-coded to localhost:4200). */
+    @org.springframework.beans.factory.annotation.Value("${app.frontend-url:http://localhost:4200}")
+    private String frontendBaseUrl;
+
     /**
      * Generic webhook handler for POST-based webhooks (PayPal, Stripe)
      */
@@ -126,10 +130,12 @@ public class WebhookController {
             Optional<PaymentTransaction> txOpt = paymentTransactionRepository.findByTransactionId(paymentId);
             if (txOpt.isPresent()) {
                 PaymentTransaction tx = txOpt.get();
-                if ("COMPLETED".equals(tx.getStatus())) {
+                // VERIFIED = paid at Flouci, YoSales confirmation pending (it is retried): the coach did pay.
+                if ("COMPLETED".equals(tx.getStatus()) || "VERIFIED".equals(tx.getStatus())) {
                     return redirectToFrontend("/payment/success?invoiceId=" + tx.getInvoiceId());
                 } else {
-                    return redirectToFrontend("/payment/failed?error=not_completed");
+                    // SUB-23: the invoice lets the return page offer "try again" for the right invoice.
+                    return redirectToFrontend("/payment/failed?error=not_completed&invoiceId=" + tx.getInvoiceId());
                 }
             }
             return redirectToFrontend("/payment/failed?error=transaction_not_found");
@@ -186,7 +192,7 @@ public class WebhookController {
     }
 
     private ResponseEntity<?> redirectToFrontend(String path) {
-        String frontendUrl = "http://localhost:4200" + path;
+        String frontendUrl = frontendBaseUrl + path;
         return ResponseEntity
                 .status(HttpStatus.FOUND)
                 .location(URI.create(frontendUrl))

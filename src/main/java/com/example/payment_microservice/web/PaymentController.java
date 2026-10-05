@@ -46,6 +46,21 @@ public class PaymentController {
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).build();
         }
     }
+    /** SUB-52: called by YoSales for a payment pending for a while; answers the state of the transaction. */
+    @GetMapping("/{transactionId}/reconcile")
+    public ResponseEntity<Map<String, String>> reconcile(@PathVariable String transactionId) {
+        try {
+            String status = gatewayFactory.getHandler("FLOUCI").reconcile(transactionId);
+            return ResponseEntity.ok(Map.of("status", status == null ? "PENDING" : status));
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND).build();
+        } catch (IllegalStateException e) {
+            return ResponseEntity.status(HttpStatus.BAD_GATEWAY).build();
+        } catch (Exception e) {
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).build();
+        }
+    }
+
     @PostMapping("/verify-credentials")
     public ResponseEntity<Boolean> verifyCredentials(
             @RequestBody    VerificationRequest verificationRequest) {

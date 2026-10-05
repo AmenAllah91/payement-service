@@ -35,6 +35,10 @@ public class PaymentTransaction {
     @Column(nullable = false, precision = 19, scale = 2)
     private BigDecimal amount;
 
+    /** Exact amount sent to the gateway, in millimes (SUB-10). */
+    @Column
+    private Long amountMillimes;
+
     @Column(nullable = false, length = 3)
     private String currency;
 

@@ -47,7 +47,8 @@ public class FlouciHandler implements PaymentGatewayHandler {
             }
 
             FlouciPaymentRequest body = new FlouciPaymentRequest();
-            body.setAmount(request.getAmount() * 1000); // Convert DT to millimes
+            long millimes = amountInMillimes(request);
+            body.setAmount(millimes);
             body.setSuccessLink(request.getSuccesUrl());
             body.setFailLink(request.getFailUrl());
             body.setAcceptCard(true);
@@ -81,7 +82,8 @@ public class FlouciHandler implements PaymentGatewayHandler {
                     .transactionId(res.getResult().getPaymentId()) // Flouci payment_id
                     .gatewayType("FLOUCI")
                     .status("PENDING")
-                    .amount(BigDecimal.valueOf(request.getAmount()))
+                    .amount(BigDecimal.valueOf(millimes, 3))
+                    .amountMillimes(millimes)
                     .currency(request.getCurrency() != null ? request.getCurrency() : "TND")
                     .description(request.getDescription())
                     .invoiceId(request.getInvoiceId())
@@ -110,7 +112,8 @@ public class FlouciHandler implements PaymentGatewayHandler {
         if (request.getInvoiceId() == null) {
             throw new IllegalArgumentException("invoiceId is required");
         }
-        if (request.getAmount() == null || request.getAmount() <= 0) {
+        boolean hasMillimes = request.getAmountMillimes() != null && request.getAmountMillimes() > 0;
+        if (!hasMillimes && (request.getAmount() == null || request.getAmount() <= 0)) {
             throw new IllegalArgumentException("Valid amount is required");
         }
         if (request.getUserId() == null || request.getUserId().isEmpty()) {
@@ -206,27 +209,21 @@ public class FlouciHandler implements PaymentGatewayHandler {
         log.info("Flouci verification status for payment_id {}: {}", tx.getTransactionId(), status);
 
         if ("SUCCESS".equalsIgnoreCase(status)) {
-            tx.setStatus("COMPLETED");
             tx.setGatewayResponse(objectMapper.writeValueAsString(res));
-            paymentTransactionRepository.save(tx);
-
-            try {
-                yosalesFeign.markInvoicePaid(
-                        "Bearer " + tokenService.getServiceAccountToken(),
-                        tx.getInvoiceId()
-                );
-                log.info("Invoice {} marked as paid for Flouci payment: {}", tx.getInvoiceId(), tx.getTransactionId());
-                return true;
-            } catch (Exception e) {
-                log.error("Failed to mark invoice as paid", e);
-                throw new IllegalStateException("Payment verified but invoice update failed", e);
+            // Paid at Flouci. The transaction is COMPLETED only once YoSales accepted the confirmation; until then it
+            // stays VERIFIED and the confirmation is sent again on the next webhook or status check (SUB-10).
+            if (!"COMPLETED".equals(tx.getStatus())) {
+                tx.setStatus("VERIFIED");
             }
+            paymentTransactionRepository.save(tx);
+            return confirmToYoSales(tx, "SUCCESS", res.getResult().getAmount());
         } else if ("FAILURE".equalsIgnoreCase(status) || "EXPIRED".equalsIgnoreCase(status)) {
             tx.setStatus("FAILED");
             tx.setFailureReason("Flouci transaction status: " + status);
             tx.setGatewayResponse(objectMapper.writeValueAsString(res));
             paymentTransactionRepository.save(tx);
             log.info("Flouci payment failed: {} status={}", tx.getTransactionId(), status);
+            confirmToYoSales(tx, "FAILED", res.getResult().getAmount());
             return false;
         } else {
             log.info("Flouci payment is still pending: {}", tx.getTransactionId());
@@ -293,10 +290,28 @@ public class FlouciHandler implements PaymentGatewayHandler {
         if ("COMPLETED".equals(paymentTransaction.getStatus())) {
             return true;
         }
+        if ("REJECTED".equals(paymentTransaction.getStatus())) {
+            // YoSales refused this payment (amount / invoice mismatch): needs a human, not another automatic try.
+            return false;
+        }
 
         return verifyAndCompletePayment(paymentTransaction);
     }
 
+
+    /**
+     * SUB-52: checks the transaction at Flouci and applies the result as a webhook would (confirmation to YoSales,
+     * sent again if it was lost). COMPLETED and REJECTED are final and never queried again. Safe to repeat.
+     */
+    @Override
+    public String reconcile(String transactionId) throws Exception {
+        PaymentTransaction tx = paymentTransactionRepository.findByTransactionId(transactionId)
+                .orElseThrow(() -> new IllegalArgumentException("Payment transaction not found: " + transactionId));
+        if (!"COMPLETED".equals(tx.getStatus()) && !"REJECTED".equals(tx.getStatus())) {
+            verifyAndCompletePayment(tx);
+        }
+        return tx.getStatus();
+    }
 
     private Map<String, Object> getBillingCredentials(Long invoiceId) {
         return yosalesFeign.getBillingInfoByInvoiceIdAndGateway(
@@ -304,5 +319,46 @@ public class FlouciHandler implements PaymentGatewayHandler {
                 invoiceId,
                 "FLOUCI"
         );
+    }
+
+    /** Exact amount in millimes: the value sent by YoSales, or the legacy whole-dinar amount x 1000. */
+    static long amountInMillimes(PaymentRequestDto request) {
+        if (request.getAmountMillimes() != null && request.getAmountMillimes() > 0) {
+            return request.getAmountMillimes();
+        }
+        return request.getAmount() * 1000;
+    }
+
+    /**
+     * Sends the verified result to YoSales (SUB-10). YoSales checks the amount against the invoice and ignores a
+     * confirmation it already applied, so this can be called again safely.
+     */
+    boolean confirmToYoSales(PaymentTransaction tx, String status, Long verifiedMillimes) {
+        PaymentConfirmationRequest body = new PaymentConfirmationRequest(tx.getInvoiceId(), tx.getPaymentId(),
+                tx.getTransactionId(), status, verifiedMillimes, tx.getCurrency());
+        try {
+            Map<String, String> answer = yosalesFeign.confirmPayment("Bearer " + tokenService.getServiceAccountToken(), body);
+            log.info("YoSales answer for Flouci payment {} ({}): {}", tx.getTransactionId(), status, answer);
+            if ("SUCCESS".equals(status)) {
+                tx.setStatus("COMPLETED");
+                tx.setCompletedAt(java.time.LocalDateTime.now());
+                paymentTransactionRepository.save(tx);
+                return true;
+            }
+            return false;
+        } catch (feign.FeignException.Conflict refused) {
+            // Money may have been received but YoSales did not apply it: this needs a human (refund or fix).
+            log.error("YoSales refused the confirmation of Flouci payment {}: {}", tx.getTransactionId(), refused.contentUTF8());
+            if ("SUCCESS".equals(status)) {
+                tx.setStatus("REJECTED");
+                tx.setFailureReason("YoSales refused the confirmation: " + refused.contentUTF8());
+                paymentTransactionRepository.save(tx);
+            }
+            return false;
+        } catch (Exception e) {
+            log.error("Could not send the confirmation of Flouci payment {} to YoSales, it will be sent again",
+                    tx.getTransactionId(), e);
+            return false;
+        }
     }
 }

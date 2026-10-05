@@ -7,6 +7,9 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestHeader;
 
+import com.example.payment_microservice.dto.PaymentConfirmationRequest;
+import org.springframework.web.bind.annotation.RequestBody;
+
 import java.util.Map;
 
 @FeignClient(name = "yo-sales", url = "${feign.yosales.uri}")
@@ -24,4 +27,7 @@ public interface YosalesFeign {
     );
 
 
+    /** SUB-10: confirmation with the amount verified at the gateway (service account only). Idempotent on YoSales. */
+    @PostMapping("/api/payments/confirmations")
+    Map<String, String> confirmPayment(@RequestHeader("Authorization") String token, @RequestBody PaymentConfirmationRequest body);
 }
