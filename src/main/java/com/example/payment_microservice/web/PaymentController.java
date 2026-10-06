@@ -33,6 +33,26 @@ public class PaymentController {
             return ResponseEntity.badRequest().body(new PaymentResponseDto(null, null, "FAILED", e.getMessage()));
         }
     }
+    /** SUB-62: charges the saved card of the subscription (no page, the coach is not there). */
+    @PostMapping("/charge-saved")
+    public ResponseEntity<PaymentResponseDto> chargeSavedCard(@RequestBody PaymentRequestDto request) {
+        try {
+            return ResponseEntity.ok(gatewayFactory.getHandler(request.getGatewayType()).chargeSavedCard(request));
+        } catch (Exception e) {
+            return ResponseEntity.badRequest().body(new PaymentResponseDto(null, null, "FAILED", e.getMessage()));
+        }
+    }
+
+    /** SUB-62: link to the Stripe page where the coach saves a new card. */
+    @PostMapping("/setup-card")
+    public ResponseEntity<PaymentResponseDto> setupCard(@RequestBody PaymentRequestDto request) {
+        try {
+            return ResponseEntity.ok(gatewayFactory.getHandler(request.getGatewayType()).setupCard(request));
+        } catch (Exception e) {
+            return ResponseEntity.badRequest().body(new PaymentResponseDto(null, null, "FAILED", e.getMessage()));
+        }
+    }
+
     @GetMapping("/{invoiceId}/status-payment")
     public ResponseEntity<Boolean> getStatusPayment(@PathVariable String invoiceId) {
         try {

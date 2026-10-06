@@ -33,4 +33,14 @@ public class PaymentRequestDto {
     private String failUrl;
     private String brandName;
     private String brandLogo;
+    /** SUB-62: keep the card at Stripe for the next payments (automatic renewal). */
+    private Boolean saveCard;
+    /** SUB-62: Stripe customer already known for this subscription (cus_...), to keep one customer per coach. */
+    private String providerCustomerId;
+    /** SUB-62: saved card to charge without the coach (pm_...). */
+    private String providerPaymentMethodId;
+    /** SUB-62: subscription whose card is changed (card setup). */
+    private Long subscriptionId;
+    /** SUB-62: product of the subscription (its Stripe configuration). */
+    private Long productId;
 }

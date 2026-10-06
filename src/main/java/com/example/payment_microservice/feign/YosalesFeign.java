@@ -30,4 +30,9 @@ public interface YosalesFeign {
     /** SUB-10: confirmation with the amount verified at the gateway (service account only). Idempotent on YoSales. */
     @PostMapping("/api/payments/confirmations")
     Map<String, String> confirmPayment(@RequestHeader("Authorization") String token, @RequestBody PaymentConfirmationRequest body);
+
+    /** SUB-62: the card the coach saved at Stripe ("change my card"), for the subscription (service account only). */
+    @PostMapping("/api/subscriptions/{subscriptionId}/card")
+    Map<String, Object> saveCard(@RequestHeader("Authorization") String token, @PathVariable("subscriptionId") Long subscriptionId,
+                                 @RequestBody com.example.payment_microservice.dto.SavedCardDto card);
 }

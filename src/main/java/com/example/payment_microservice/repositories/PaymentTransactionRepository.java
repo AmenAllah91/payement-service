@@ -9,5 +9,7 @@ import java.util.Optional;
 @Repository
 public interface PaymentTransactionRepository extends JpaRepository<PaymentTransaction,Long> {
     Optional<PaymentTransaction> findByTransactionId(String transactionId);
+    /** SUB-62: one transaction per YoSales payment (a repeated charge of a saved card returns the first one). */
+    Optional<PaymentTransaction> findByPaymentId(Long paymentId);
     Optional<PaymentTransaction> findPaymentTransactionByInvoiceId(Long invoiceId);
 }
