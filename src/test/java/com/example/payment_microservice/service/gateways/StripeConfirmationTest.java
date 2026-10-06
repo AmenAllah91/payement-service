@@ -34,7 +34,8 @@ class StripeConfirmationTest {
 
     @BeforeEach
     void setUp() {
-        handler = new StripeHandler(repository, yosales, tokens, new ObjectMapper()) {
+        handler = new StripeHandler(repository, yosales, tokens, new ObjectMapper(),
+                mock(com.example.payment_microservice.repositories.CardSetupRepository.class)) {
             @Override
             protected SessionState retrieveSession(String apiKey, String sessionId) {
                 assertThat(apiKey).isEqualTo("sk_test_product");
