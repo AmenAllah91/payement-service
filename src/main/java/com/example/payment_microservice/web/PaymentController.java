@@ -20,6 +20,7 @@ import java.util.Map;
 public class PaymentController {
 
     private final PaymentGatewayFactory gatewayFactory;
+    private final com.example.payment_microservice.repositories.PaymentTransactionRepository transactions;
 
 
     @PostMapping("/initiate")
@@ -50,7 +51,11 @@ public class PaymentController {
     @GetMapping("/{transactionId}/reconcile")
     public ResponseEntity<Map<String, String>> reconcile(@PathVariable String transactionId) {
         try {
-            String status = gatewayFactory.getHandler("FLOUCI").reconcile(transactionId);
+            // SUB-61: the handler of the gateway that created the transaction (Flouci or Stripe).
+            String gateway = transactions.findByTransactionId(transactionId)
+                    .map(com.example.payment_microservice.domain.PaymentTransaction::getGatewayType)
+                    .orElseThrow(() -> new IllegalArgumentException("Payment transaction not found: " + transactionId));
+            String status = gatewayFactory.getHandler(gateway).reconcile(transactionId);
             return ResponseEntity.ok(Map.of("status", status == null ? "PENDING" : status));
         } catch (IllegalArgumentException e) {
             return ResponseEntity.status(HttpStatus.NOT_FOUND).build();

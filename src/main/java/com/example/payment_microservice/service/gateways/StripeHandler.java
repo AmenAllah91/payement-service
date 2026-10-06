@@ -2,6 +2,7 @@ package com.example.payment_microservice.service.gateways;
 
 import com.example.payment_microservice.domain.PaymentTransaction;
 import com.example.payment_microservice.dto.BillingConfigurationDto;
+import com.example.payment_microservice.dto.PaymentConfirmationRequest;
 import com.example.payment_microservice.dto.PaymentRequestDto;
 import com.example.payment_microservice.dto.PaymentResponseDto;
 import com.example.payment_microservice.feign.YosalesFeign;
@@ -53,7 +54,8 @@ public class StripeHandler implements PaymentGatewayHandler {
             validateRequest(request);
             Stripe.apiKey = request.getApiKey();
             String currency = request.getCurrency() != null ? request.getCurrency().toLowerCase() : "usd";
-            long amountInCents =(request.getAmount() * 100);
+            // SUB-61: YoSales sends the exact amount in minor units of the invoice currency (cents for USD).
+            long amountInCents = amountInMinorUnits(request);
             Map<String, String> metadata = new HashMap<>();
             metadata.put("paymentId", String.valueOf(request.getPaymentId()));
             metadata.put("invoiceId", String.valueOf(request.getInvoiceId()));
@@ -90,8 +92,9 @@ public class StripeHandler implements PaymentGatewayHandler {
                     .transactionId(session.getId())
                     .gatewayType("STRIPE")
                     .status("PENDING")
-                    .amount(BigDecimal.valueOf(request.getAmount()))
-                    .currency(request.getCurrency() != null ? request.getCurrency() : "USD")
+                    .amount(BigDecimal.valueOf(amountInCents, 2))
+                    .amountMillimes(amountInCents)
+                    .currency(request.getCurrency() != null ? request.getCurrency().toUpperCase() : "USD")
                     .description(request.getDescription())
                     .invoiceId(request.getInvoiceId())
                     .customerId(request.getUserId())
@@ -140,7 +143,8 @@ public class StripeHandler implements PaymentGatewayHandler {
         if (request.getInvoiceId() == null) {
             throw new IllegalArgumentException("invoiceId is required");
         }
-        if (request.getAmount() == null || request.getAmount() <= 0) {
+        boolean hasMinorUnits = request.getAmountMillimes() != null && request.getAmountMillimes() > 0;
+        if (!hasMinorUnits && (request.getAmount() == null || request.getAmount() <= 0)) {
             throw new IllegalArgumentException("Valid amount is required");
         }
         if (request.getUserId() == null || request.getUserId().isEmpty()) {
@@ -165,15 +169,14 @@ public class StripeHandler implements PaymentGatewayHandler {
             BillingConfigurationDto config = this.yosalesFeign.getBillingInfoByproductIdAndGateway("Bearer "+tokenService.getServiceAccountToken(), String.valueOf(productId),"STRIPE");
             log.info("Stripe webhook received");
             String webhokSecret =  (String) config.getConfigParams().get("webhookSecret");
-            if (stripeSignature != null && webhokSecret != null) {
-                boolean isValid = verifyWebhookSignature(payload, stripeSignature,webhokSecret);
-                if (!isValid) {
-                    log.error("Invalid Stripe webhook signature - rejecting event");
-                    return;
-                }
-                log.info("Stripe webhook signature verified successfully");
-            } else {
-                log.warn("Stripe webhook received without signature verification ");
+            // SUB-61: never trust an unsigned webhook (anyone could post a fake "paid" event).
+            if (stripeSignature == null || webhokSecret == null || webhokSecret.isBlank()) {
+                log.error("Stripe webhook rejected: missing signature or webhook secret");
+                return;
+            }
+            if (!verifyWebhookSignature(payload, stripeSignature, webhokSecret)) {
+                log.error("Invalid Stripe webhook signature - rejecting event");
+                return;
             }
             JsonNode eventJson = objectMapper.readTree(payload);
             String eventType = eventJson.get("type").asText();
@@ -181,9 +184,10 @@ public class StripeHandler implements PaymentGatewayHandler {
             log.info("Processing Stripe event: {}", eventType);
 
             switch (eventType) {
-                case "checkout.session.completed" -> handleCheckoutSessionCompleted(eventJson);
-                case "checkout.session.async_payment_succeeded" -> handleAsyncPaymentSucceeded(eventJson);
-                case "checkout.session.async_payment_failed" -> handleAsyncPaymentFailed(eventJson);
+                // SUB-61: whatever the event says, the session is read again at Stripe and the result is confirmed to
+                // YoSales by the single confirmation path (amount and currency checked there).
+                case "checkout.session.completed", "checkout.session.async_payment_succeeded",
+                     "checkout.session.async_payment_failed", "checkout.session.expired" -> sessionEvent(eventJson);
                 case "payment_intent.succeeded" -> handlePaymentIntentSucceeded(eventJson);
                 case "payment_intent.payment_failed" -> handlePaymentIntentFailed(eventJson);
                 case "charge.refunded" -> handleChargeRefunded(eventJson);
@@ -195,113 +199,102 @@ public class StripeHandler implements PaymentGatewayHandler {
         }
     }
 
-    /**
-     * Handle checkout session completed
-     */
-    private void handleCheckoutSessionCompleted(JsonNode eventJson) {
+    private void sessionEvent(JsonNode eventJson) {
         try {
-            JsonNode sessionData = eventJson.get("data").get("object");
+            String sessionId = eventJson.get("data").get("object").get("id").asText();
+            paymentTransactionRepository.findByTransactionId(sessionId).ifPresentOrElse(
+                    this::verifyAndConfirm,
+                    () -> log.warn("Transaction not found for Stripe session: {}", sessionId));
+        } catch (Exception e) {
+            log.error("Error handling Stripe session event", e);
+        }
+    }
 
-            String sessionId = sessionData.get("id").asText();
-            String paymentStatus = sessionData.get("payment_status").asText();
+    /** What YoSales needs from a Checkout Session, read at Stripe (never from the webhook payload). */
+    public record SessionState(String status, String paymentStatus, Long amountTotal, String currency) {
+    }
 
-            // Get metadata
-            JsonNode metadata = sessionData.get("metadata");
-            Long invoiceId = metadata.has("invoiceId") ?
-                    Long.parseLong(metadata.get("invoiceId").asText()) : null;
-            Long paymentId = metadata.has("paymentId") ?
-                    Long.parseLong(metadata.get("paymentId").asText()) : null;
+    /** Reads the session at Stripe with the secret key of the product (overridden in tests). */
+    protected SessionState retrieveSession(String apiKey, String sessionId) throws StripeException {
+        Session session = Session.retrieve(sessionId, com.stripe.net.RequestOptions.builder().setApiKey(apiKey).build());
+        return new SessionState(session.getStatus(), session.getPaymentStatus(), session.getAmountTotal(), session.getCurrency());
+    }
 
-            log.info("Checkout session completed: sessionId={}, status={}, paymentId={}, invoiceId={}",
-                    sessionId, paymentStatus, paymentId, invoiceId);
-
-            if ("paid".equals(paymentStatus)) {
-                Optional<PaymentTransaction> txOpt =
-                        paymentTransactionRepository.findByTransactionId(sessionId);
-
-                txOpt.ifPresentOrElse(
-                        tx -> {
-                            tx.setStatus("COMPLETED");
-                            tx.setGatewayResponse(eventJson.toString());
-                            paymentTransactionRepository.save(tx);
-
-                            // Mark invoice as paid
-                            if (tx.getInvoiceId() != null) {
-                                try {
-                                    yosalesFeign.markInvoicePaid(
-                                            "Bearer " + tokenService.getServiceAccountToken(),
-                                            tx.getInvoiceId()
-                                    );
-                                    log.info("Invoice {} marked as paid for Stripe session: {}",
-                                            tx.getInvoiceId(), sessionId);
-                                } catch (Exception e) {
-                                    log.error("Failed to mark invoice as paid: {}", tx.getInvoiceId(), e);
-                                }
-                            }
-                        },
-                        () -> log.warn("Transaction not found for Stripe session: {}", sessionId)
-                );
-            } else {
-                log.warn("Payment status is not 'paid': sessionId={}, status={}", sessionId, paymentStatus);
+    /**
+     * SUB-61: checks the session at Stripe and sends the result to YoSales: paid -> SUCCESS with the amount Stripe
+     * collected; expired or failed -> FAILED; still open -> nothing. COMPLETED and REJECTED are final. Safe to repeat.
+     */
+    String verifyAndConfirm(PaymentTransaction tx) {
+        if ("COMPLETED".equals(tx.getStatus()) || "REJECTED".equals(tx.getStatus())) {
+            return tx.getStatus();
+        }
+        try {
+            Map<String, Object> credentials = yosalesFeign.getBillingInfoByInvoiceIdAndGateway(
+                    "Bearer " + tokenService.getServiceAccountToken(), tx.getInvoiceId(), "STRIPE");
+            Object apiKey = credentials == null ? null : credentials.get("apiKey");
+            if (apiKey == null) {
+                throw new IllegalStateException("Stripe credentials missing for invoice " + tx.getInvoiceId());
             }
+            SessionState session = retrieveSession(apiKey.toString(), tx.getTransactionId());
+            if ("paid".equals(session.paymentStatus()) || "no_payment_required".equals(session.paymentStatus())) {
+                if (!"COMPLETED".equals(tx.getStatus())) {
+                    tx.setStatus("VERIFIED");
+                    paymentTransactionRepository.save(tx);
+                }
+                confirmToYoSales(tx, "SUCCESS", session.amountTotal(), session.currency());
+            } else if ("expired".equals(session.status())) {
+                tx.setStatus("FAILED");
+                tx.setFailureReason("Stripe session expired");
+                paymentTransactionRepository.save(tx);
+                confirmToYoSales(tx, "FAILED", session.amountTotal(), session.currency());
+            } else {
+                log.info("Stripe session {} still {} / {}", tx.getTransactionId(), session.status(), session.paymentStatus());
+            }
+        } catch (StripeException e) {
+            throw new IllegalStateException("Stripe API error: " + e.getMessage(), e);
+        }
+        return tx.getStatus();
+    }
 
+    /** Sends the verified result to YoSales (SUB-10); YoSales checks amount and currency and ignores a repeat. */
+    void confirmToYoSales(PaymentTransaction tx, String status, Long amountMinorUnits, String currency) {
+        PaymentConfirmationRequest body = new PaymentConfirmationRequest(tx.getInvoiceId(), tx.getPaymentId(),
+                tx.getTransactionId(), status, amountMinorUnits, currency == null ? tx.getCurrency() : currency.toUpperCase());
+        try {
+            Map<String, String> answer = yosalesFeign.confirmPayment("Bearer " + tokenService.getServiceAccountToken(), body);
+            log.info("YoSales answer for Stripe session {} ({}): {}", tx.getTransactionId(), status, answer);
+            if ("SUCCESS".equals(status)) {
+                tx.setStatus("COMPLETED");
+                tx.setCompletedAt(java.time.LocalDateTime.now());
+                paymentTransactionRepository.save(tx);
+            }
+        } catch (feign.FeignException.Conflict refused) {
+            log.error("YoSales refused the confirmation of Stripe session {}: {}", tx.getTransactionId(), refused.contentUTF8());
+            if ("SUCCESS".equals(status)) {
+                tx.setStatus("REJECTED");
+                tx.setFailureReason("YoSales refused the confirmation: " + refused.contentUTF8());
+                paymentTransactionRepository.save(tx);
+            }
         } catch (Exception e) {
-            log.error("Error handling checkout session completed", e);
+            log.error("Could not send the confirmation of Stripe session {} to YoSales, it will be sent again",
+                    tx.getTransactionId(), e);
         }
     }
 
-    /**
-     * Handle async payment succeeded (for delayed payment methods like bank transfers)
-     */
-    private void handleAsyncPaymentSucceeded(JsonNode eventJson) {
-        try {
-            JsonNode sessionData = eventJson.get("data").get("object");
-            String sessionId = sessionData.get("id").asText();
-
-            log.info("Async payment succeeded: {}", sessionId);
-
-            paymentTransactionRepository.findByTransactionId(sessionId)
-                    .ifPresent(tx -> {
-                        tx.setStatus("COMPLETED");
-                        tx.setGatewayResponse(eventJson.toString());
-                        paymentTransactionRepository.save(tx);
-                        try {
-                            yosalesFeign.markInvoicePaid(
-                                    "Bearer " + tokenService.getServiceAccountToken(),
-                                    tx.getInvoiceId()
-                            );
-                            log.info("Invoice {} marked as paid (async)", tx.getInvoiceId());
-                        } catch (Exception e) {
-                            log.error("Failed to mark invoice as paid", e);
-                        }
-                    });
-
-        } catch (Exception e) {
-            log.error("Error handling async payment succeeded", e);
-        }
+    /** SUB-52: reconciliation of a pending payment asked by YoSales. */
+    @Override
+    public String reconcile(String transactionId) {
+        PaymentTransaction tx = paymentTransactionRepository.findByTransactionId(transactionId)
+                .orElseThrow(() -> new IllegalArgumentException("Payment transaction not found: " + transactionId));
+        return verifyAndConfirm(tx);
     }
 
-    /**
-     * Handle async payment failed
-     */
-    private void handleAsyncPaymentFailed(JsonNode eventJson) {
-        try {
-            JsonNode sessionData = eventJson.get("data").get("object");
-            String sessionId = sessionData.get("id").asText();
-
-            log.error("Async payment failed: {}", sessionId);
-
-            paymentTransactionRepository.findByTransactionId(sessionId)
-                    .ifPresent(tx -> {
-                        tx.setStatus("FAILED");
-                        tx.setFailureReason("Async payment failed");
-                        tx.setGatewayResponse(eventJson.toString());
-                        paymentTransactionRepository.save(tx);
-                    });
-
-        } catch (Exception e) {
-            log.error("Error handling async payment failed", e);
+    /** Exact amount in minor units: the value sent by YoSales, or the legacy whole amount x 100. */
+    static long amountInMinorUnits(PaymentRequestDto request) {
+        if (request.getAmountMillimes() != null && request.getAmountMillimes() > 0) {
+            return request.getAmountMillimes();
         }
+        return request.getAmount() * 100;
     }
 
     private void handlePaymentIntentSucceeded(JsonNode eventJson) {
