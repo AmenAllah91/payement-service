@@ -115,8 +115,14 @@ public class WebhookController {
     @GetMapping("/{productId}/flouci")
     public ResponseEntity<?> handleFlouciRedirect(
             @PathVariable Long productId,
-            @RequestParam("payment_id") String paymentId) {
+            @RequestParam(value = "payment_id", required = false) String paymentIdParam,
+            @RequestParam(value = "invoiceId", required = false) String invoiceIdParam) {
 
+        String paymentId = flouciPaymentId(paymentIdParam, invoiceIdParam);
+        if (paymentId == null) {
+            log.error("Flouci redirect without payment_id: productId={}, invoiceId={}", productId, invoiceIdParam);
+            return redirectToFrontend("/payment/failed?error=transaction_not_found");
+        }
         try {
             log.info("Flouci redirect webhook: productId={}, paymentId={}", productId, paymentId);
             PaymentGatewayHandler handler = gatewayFactory.getHandler("FLOUCI");
@@ -144,6 +150,23 @@ public class WebhookController {
             log.error("Flouci redirect handler error", e);
             return redirectToFrontend("/payment/failed?error=server_error");
         }
+    }
+
+    /**
+     * The Flouci payment id of a return link. YoSales already puts {@code ?invoiceId=X} on the link, so Flouci may add
+     * its id as {@code &payment_id=} or glue it as {@code ?invoiceId=X?payment_id=}: both are read.
+     */
+    static String flouciPaymentId(String paymentId, String invoiceId) {
+        if (paymentId != null && !paymentId.isBlank()) {
+            return paymentId.trim();
+        }
+        if (invoiceId != null && invoiceId.contains("payment_id=")) {
+            String glued = invoiceId.substring(invoiceId.indexOf("payment_id=") + "payment_id=".length());
+            int end = glued.indexOf('&');
+            glued = end >= 0 ? glued.substring(0, end) : glued;
+            return glued.isBlank() ? null : glued.trim();
+        }
+        return null;
     }
 
     /**

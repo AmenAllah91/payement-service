@@ -7,9 +7,8 @@ app:
   frontend-url: ${APP_FRONTEND_URL:http://localhost:4200}
   realm: yo-sales
   client-id: payment-ms
-  client-secret: S5afHPlulEzP6tU102vEbGpP2vnDfkM8
-  kc-host: https://login.yosales.co
-  server-ip: "51.178.55.238"
+  client-secret: JfSiRh5NykLVHdnXUJKADguO3Uz73s4X
+  kc-host: https://login-int.yosales.co
 
 spring:
   cloud:
@@ -38,14 +37,14 @@ spring:
             authorization-grant-type: password
         provider:
           keycloak:
-            token-uri: https://login.yosales.co/realms/yo-sales/protocol/openid-connect/token
-            authorization-uri: https://login.yosales.co/realms/yo-sales/protocol/openid-connect/auth
-            user-info-uri: https://login.yosales.co/realms/yo-sales/protocol/openid-connect/userinfo
+            token-uri: https://login-int.yosales.co/realms/yo-sales/protocol/openid-connect/token
+            authorization-uri: https://login-int.yosales.co/realms/yo-sales/protocol/openid-connect/auth
+            user-info-uri: https://login-int.yosales.co/realms/yo-sales/protocol/openid-connect/userinfo
             user-name-attribute: preferred_username
       resourceserver:
         jwt:
-          jwk-set-uri: https://login.yosales.co/realms/yo-sales/protocol/openid-connect/certs
-          issuer-uri: https://login.yosales.co/realms/yo-sales
+          jwk-set-uri: https://login-int.yosales.co/realms/yo-sales/protocol/openid-connect/certs
+          issuer-uri: https://login-int.yosales.co/realms/yo-sales
 
 jwt:
   auth:
