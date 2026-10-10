@@ -23,8 +23,13 @@ public class PaymentRequestDto {
     private String webhookId;
     private Long invoiceId;
     private Long paymentId;
+
+    @com.fasterxml.jackson.annotation.JsonAlias({"success_link", "successUrl", "successLink"})
     private String succesUrl;
+
+    @com.fasterxml.jackson.annotation.JsonAlias({"fail_link", "failureUrl", "failLink"})
     private String failUrl;
+
     private String brandName;
     private String brandLogo;
 }
