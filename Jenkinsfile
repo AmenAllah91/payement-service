@@ -36,21 +36,18 @@ pipeline {
             }
         }
         stage('Perform Service Update') {
-            steps {
-                sshCommand remote: [
-                    name: 'remote-vm',
-                    host: "${VPS_IP}",
-                    user: "${VPS_USER_USR}",
-                    password: "${VPS_USER_PSW}",
-                    allowAnyHosts: true
-                ],
-                command: """
-                    cd workspace-yosales &&
-                    sudo docker-compose pull ${SERVICE_NAME} &&
-                    sudo docker-compose down ${SERVICE_NAME} &&
-                    sudo docker-compose up -d ${SERVICE_NAME}
-                """
-            }
-        }
+                    steps {
+                        sshCommand remote: [
+                          name: 'remote-vm',
+                          host: "${VPS_IP}",
+                          user: "${VPS_USER_USR}",
+                          password: "${VPS_USER_PSW}",
+                          allowAnyHosts: true
+                        ], command: """
+                          echo ${USER_CREDENTIALS_PSW} | docker login -u ${USER_CREDENTIALS_USR} --password-stdin
+                          cd workspace-yosales && docker compose pull ${SERVICE_NAME} && docker compose down ${SERVICE_NAME} && docker compose up -d ${SERVICE_NAME}
+                        """
+                    }
+                }
     }
 }
