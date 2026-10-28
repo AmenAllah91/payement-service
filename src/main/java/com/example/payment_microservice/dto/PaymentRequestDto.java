@@ -31,6 +31,8 @@ public class PaymentRequestDto {
     private String succesUrl;
     @JsonAlias("failureUrl")
     private String failUrl;
+    /** Audit MP5: the front of the product (https://app.example.com) where the customer comes back after Flouci. */
+    private String returnUrl;
     private String brandName;
     private String brandLogo;
     /** SUB-62: keep the card at Stripe for the next payments (automatic renewal). */

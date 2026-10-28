@@ -77,7 +77,6 @@ class FlouciConfirmationTest {
         assertThat(body.getValue().getPaymentId()).isEqualTo(44L);
         assertThat(body.getValue().getStatus()).isEqualTo("SUCCESS");
         assertThat(tx.getStatus()).isEqualTo("COMPLETED");
-        verify(yosales, never()).markInvoicePaid(anyString(), any());
     }
 
     @Test

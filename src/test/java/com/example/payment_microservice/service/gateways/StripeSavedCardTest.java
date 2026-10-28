@@ -2,7 +2,6 @@ package com.example.payment_microservice.service.gateways;
 
 import com.example.payment_microservice.domain.CardSetup;
 import com.example.payment_microservice.domain.PaymentTransaction;
-import com.example.payment_microservice.dto.BillingConfigurationDto;
 import com.example.payment_microservice.dto.PaymentConfirmationRequest;
 import com.example.payment_microservice.dto.PaymentRequestDto;
 import com.example.payment_microservice.dto.PaymentResponseDto;
@@ -37,6 +36,7 @@ class StripeSavedCardTest {
     private final List<String> idempotencyKeys = new ArrayList<>();
     private StripeHandler.OffSessionCharge atStripe;
     private StripeHandler.SessionState sessionAtStripe;
+    private com.stripe.exception.StripeException failure;
     private StripeHandler handler;
 
     private static final StripeHandler.CardState VISA =
@@ -48,7 +48,10 @@ class StripeSavedCardTest {
             @Override
             protected OffSessionCharge chargeAtStripe(String apiKey, long amount, String currency, String customer,
                                                       String paymentMethod, String description, Map<String, String> metadata,
-                                                      String idempotencyKey) {
+                                                      String idempotencyKey) throws com.stripe.exception.StripeException {
+                if (failure != null) {
+                    throw failure;
+                }
                 assertThat(amount).isEqualTo(1700L);
                 assertThat(currency).isEqualTo("usd");
                 assertThat(customer).isEqualTo("cus_28");
@@ -79,6 +82,83 @@ class StripeSavedCardTest {
         when(repository.save(any())).thenAnswer(i -> i.getArgument(0));
         when(setups.save(any())).thenAnswer(i -> i.getArgument(0));
         when(repository.findByPaymentId(anyLong())).thenReturn(Optional.empty());
+        // The key of the product of invoice 91, as YoSales stores it.
+        when(yosales.getBillingInfoByInvoiceIdAndGateway("Bearer service-token", 91L, "STRIPE"))
+                .thenReturn(Map.of("apiKey", "sk_test_product"));
+    }
+
+    /** Review 2026-10-26: a charge with a key that is not the product's (the caller's own Stripe account) is refused. */
+    @Test
+    void aSavedCardIsNeverChargedWithAKeyOtherThanTheProducts() {
+        PaymentRequestDto foreign = renewal();
+        foreign.setApiKey("sk_test_attacker");
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> handler.chargeSavedCard(foreign))
+                .hasMessageContaining("not the one of the product");
+        assertThat(idempotencyKeys).isEmpty();
+        verify(yosales, never()).confirmPayment(anyString(), any());
+    }
+
+    /**
+     * Audit 2026-10-26 (L5): Stripe gave no answer after the charge was sent: PENDING (never "refused", which made YoSales
+     * charge again), and its webhook, found by the paymentId of its metadata, confirms the result.
+     */
+    @Test
+    void aChargeWithoutAnswerWaitsForItsWebhook() throws Exception {
+        failure = new com.stripe.exception.ApiConnectionException("Read timed out");
+        List<PaymentTransaction> saved = new ArrayList<>();
+        when(repository.save(any())).thenAnswer(i -> {
+            saved.add(i.getArgument(0));
+            return i.getArgument(0);
+        });
+
+        PaymentResponseDto answer = handler.chargeSavedCard(renewal());
+
+        assertThat(answer.getStatus()).isEqualTo("PENDING");
+        assertThat(answer.getPaymentId()).isNull(); // YoSales keeps no transaction id: the confirmation sets it
+        PaymentTransaction tx = saved.get(0);
+        assertThat(tx.getTransactionId()).isEqualTo("unknown-90");
+        verify(yosales, never()).confirmPayment(anyString(), any());
+        when(repository.findByTransactionId("unknown-90")).thenReturn(Optional.of(tx));
+        assertThat(handler.reconcile("unknown-90")).isEqualTo("PENDING"); // nothing asked at Stripe meanwhile
+
+        // The webhook of the PaymentIntent arrives.
+        when(repository.findByTransactionId("pi_77")).thenReturn(Optional.empty());
+        when(repository.findByPaymentId(90L)).thenReturn(Optional.of(tx));
+        when(yosales.getCredentialsByProductAndGateway(anyString(), eq(8L), eq("STRIPE"))).thenReturn(Map.of("webhookSecret", "whsec_x"));
+        when(yosales.confirmPayment(anyString(), any())).thenReturn(Map.of("outcome", "CONFIRMED"));
+        sessionAtStripe = new StripeHandler.SessionState("complete", "paid", 1700L, "usd");
+        String event = "{\"id\":\"evt_9\",\"object\":\"event\",\"type\":\"payment_intent.succeeded\",\"data\":{\"object\":"
+                + "{\"id\":\"pi_77\",\"object\":\"payment_intent\",\"metadata\":{\"paymentId\":\"90\",\"invoiceId\":\"91\"}}}}";
+
+        assertThat(handler.handleWebhook(event, sign(event, "whsec_x"), 8L)).isEqualTo(StripeHandler.WebhookOutcome.HANDLED);
+
+        assertThat(tx.getTransactionId()).isEqualTo("pi_77");
+        assertThat(tx.getStatus()).isEqualTo("COMPLETED");
+        ArgumentCaptor<PaymentConfirmationRequest> body = ArgumentCaptor.forClass(PaymentConfirmationRequest.class);
+        verify(yosales).confirmPayment(anyString(), body.capture());
+        assertThat(body.getValue().getPaymentId()).isEqualTo(90L);
+        assertThat(body.getValue().getTransactionId()).isEqualTo("pi_77");
+    }
+
+    private static String sign(String payload, String secret) throws Exception {
+        long now = System.currentTimeMillis() / 1000;
+        javax.crypto.Mac mac = javax.crypto.Mac.getInstance("HmacSHA256");
+        mac.init(new javax.crypto.spec.SecretKeySpec(secret.getBytes(java.nio.charset.StandardCharsets.UTF_8), "HmacSHA256"));
+        return "t=" + now + ",v1=" + java.util.HexFormat.of().formatHex(mac.doFinal((now + "." + payload).getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+    }
+
+    @Test
+    void anUnknownStripeModeStillRequiresLiveKeys() {
+        ReflectionTestUtils.setField(handler, "mode", "Live ");
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> handler.requireKeyOfMode("sk_test_x"))
+                .hasMessageContaining("Live mode");
+        ReflectionTestUtils.setField(handler, "mode", "typo");
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> handler.requireKeyOfMode("sk_test_x"))
+                .hasMessageContaining("Live mode");
+        ReflectionTestUtils.setField(handler, "mode", "TEST");
+        handler.requireKeyOfMode("sk_test_x");
+        assertThat(handler.verifyCredentials(Map.of("apiKey", "sk_live_x"))).isFalse(); // a live key on a test service
     }
 
     private static PaymentRequestDto renewal() {
@@ -204,9 +284,8 @@ class StripeSavedCardTest {
         assertThat(setup.getSubscriptionId()).isEqualTo(12L);
         assertThat(setup.getStatus()).isEqualTo("PENDING");
 
-        BillingConfigurationDto config = mock(BillingConfigurationDto.class);
-        when(config.getConfigParams()).thenReturn(Map.of("apiKey", "sk_test_product"));
-        when(yosales.getBillingInfoByproductIdAndGateway(anyString(), eq("8"), eq("STRIPE"))).thenReturn(config);
+        when(yosales.getCredentialsByProductAndGateway(anyString(), eq(8L), eq("STRIPE")))
+                .thenReturn(Map.of("apiKey", "sk_test_product"));
         sessionAtStripe = new StripeHandler.SessionState("open", null, null, null);
         assertThat(handler.verifyCardSetup(setup)).isEqualTo("PENDING");
         verify(yosales, never()).saveCard(anyString(), anyLong(), any());

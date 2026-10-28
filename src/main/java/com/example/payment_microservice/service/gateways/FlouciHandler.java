@@ -12,7 +12,6 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatusCode;
-import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 import org.springframework.web.reactive.function.client.WebClient;
 import org.springframework.web.reactive.function.client.WebClientResponseException;
@@ -26,6 +25,9 @@ import java.util.Optional;
 @Slf4j
 @RequiredArgsConstructor
 public class FlouciHandler implements PaymentGatewayHandler {
+
+    /** Gateway type of the transactions this handler created; it never touches another one. */
+    public static final String GATEWAY = "FLOUCI";
 
     private final PaymentProperties paymentProperties;
     private final PaymentTransactionRepository paymentTransactionRepository;
@@ -80,13 +82,14 @@ public class FlouciHandler implements PaymentGatewayHandler {
             PaymentTransaction tx = PaymentTransaction.builder()
                     .paymentId(request.getPaymentId()) // YoSales payment ID
                     .transactionId(res.getResult().getPaymentId()) // Flouci payment_id
-                    .gatewayType("FLOUCI")
+                    .gatewayType(GATEWAY)
                     .status("PENDING")
                     .amount(BigDecimal.valueOf(millimes, 3))
                     .amountMillimes(millimes)
                     .currency(request.getCurrency() != null ? request.getCurrency() : "TND")
                     .description(request.getDescription())
                     .invoiceId(request.getInvoiceId())
+                    .returnUrl(request.getReturnUrl())
                     .customerId(request.getUserId())
                     .build();
 
@@ -121,42 +124,48 @@ public class FlouciHandler implements PaymentGatewayHandler {
         }
     }
 
+    /**
+     * A Flouci webhook: only its payment id is used, the payment is read again at Flouci. Audit P5 (2026-10-26):
+     * handled while Flouci waits for the answer; a failure is thrown (answered 500) so that it can be sent again.
+     */
     @Override
-    @Async
-    public void handleWebhook(String payload) {
-        try {
-            log.info("Flouci webhook received: payload={}", payload);
-            String flouciPaymentId = null;
+    public void handleWebhook(String payload) throws Exception {
+        log.info("Flouci webhook received: payload={}", payload);
+        String flouciPaymentId = null;
 
-            if (payload != null && payload.trim().startsWith("{")) {
-                JsonNode rootNode = objectMapper.readTree(payload);
-                if (rootNode.has("details") && rootNode.get("details").has("order_number")) {
-                    flouciPaymentId = rootNode.get("details").get("order_number").asText();
-                }
-            } else if (payload != null) {
-                flouciPaymentId = payload.trim();
+        if (payload != null && payload.trim().startsWith("{")) {
+            JsonNode rootNode = objectMapper.readTree(payload);
+            if (rootNode.has("details") && rootNode.get("details").has("order_number")) {
+                flouciPaymentId = rootNode.get("details").get("order_number").asText();
             }
+        } else if (payload != null) {
+            flouciPaymentId = payload.trim();
+        }
 
-            if (flouciPaymentId == null || flouciPaymentId.isEmpty()) {
-                log.error("Flouci webhook payload missing details.order_number / payment ID");
-                return;
-            }
+        if (flouciPaymentId == null || flouciPaymentId.isEmpty()) {
+            log.error("Flouci webhook payload missing details.order_number / payment ID");
+            return;
+        }
 
-            Optional<PaymentTransaction> txOpt = paymentTransactionRepository.findByTransactionId(flouciPaymentId);
-            if (txOpt.isEmpty()) {
-                log.error("Transaction not found for Flouci payment_id: {}", flouciPaymentId);
-                return;
-            }
+        Optional<PaymentTransaction> txOpt = paymentTransactionRepository.findByTransactionId(flouciPaymentId);
+        if (txOpt.isEmpty()) {
+            log.error("Transaction not found for Flouci payment_id: {}", flouciPaymentId);
+            return;
+        }
 
-            PaymentTransaction tx = txOpt.get();
-            verifyAndCompletePayment(tx);
-
-        } catch (Exception e) {
-            log.error("Error processing Flouci webhook", e);
+        PaymentTransaction tx = txOpt.get();
+        verifyAndCompletePayment(tx);
+        if (GATEWAY.equals(tx.getGatewayType()) && "VERIFIED".equals(tx.getStatus())) {
+            // Paid at Flouci but YoSales did not get the confirmation: sent again with the event (and by YoSales).
+            throw new IllegalStateException("Flouci payment " + flouciPaymentId + " is paid but not confirmed to YoSales yet");
         }
     }
 
-    public void handleWebhookSync(String paymentId) {
+    /**
+     * The return link of the coach: the payment is read at Flouci. Audit 2026-10-26: answers false when it could not be
+     * read (Flouci or YoSales did not answer), so that the coach is not told it failed when it may be paid.
+     */
+    public boolean handleWebhookSync(String paymentId) {
         try {
             log.info("Flouci synchronous webhook verification for paymentId={}", paymentId);
             Optional<PaymentTransaction> txOpt = paymentTransactionRepository.findByTransactionId(paymentId);
@@ -165,12 +174,19 @@ public class FlouciHandler implements PaymentGatewayHandler {
             } else {
                 log.error("Transaction not found for Flouci payment_id: {}", paymentId);
             }
+            return true;
         } catch (Exception e) {
             log.error("Error in Flouci synchronous webhook verification", e);
+            return false;
         }
     }
 
     private boolean verifyAndCompletePayment(PaymentTransaction tx) throws Exception {
+        if (!GATEWAY.equals(tx.getGatewayType())) {
+            // A Flouci webhook or return link naming another gateway's transaction: ignored, never confirmed.
+            log.warn("Flouci verification refused for transaction {} of gateway {}", tx.getTransactionId(), tx.getGatewayType());
+            return false;
+        }
         Map<String, Object> credentials = getBillingCredentials(tx.getInvoiceId());
 
         String appPublic = (String) credentials.get("appToken");

@@ -8,6 +8,16 @@ import java.util.Map;
 public interface PaymentGatewayHandler {
     PaymentResponseDto initiatePayment(PaymentRequestDto request) throws Exception;
     void handleWebhook(String paymentRef) throws Exception;
+
+    /** Audit P5: what a webhook post gets; a processing failure is thrown so that the gateway sends the event again. */
+    enum WebhookOutcome { HANDLED, REJECTED }
+
+    /** A webhook post (signature checked by the gateways that sign them). Safe to repeat: the state is read again. */
+    default WebhookOutcome handleWebhook(String payload, String signature, Long productId) throws Exception {
+        handleWebhook(payload);
+        return WebhookOutcome.HANDLED;
+    }
+
     Boolean verifyCredentials(Map<String, Object> credentials) throws Exception;
     Boolean getPaymentStatusByInvoiceId(String invoiceId) throws Exception;
 
