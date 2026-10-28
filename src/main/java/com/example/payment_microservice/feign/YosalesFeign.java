@@ -1,6 +1,5 @@
 package com.example.payment_microservice.feign;
 
-import com.example.payment_microservice.dto.BillingConfigurationDto;
 import org.springframework.cloud.openfeign.FeignClient;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -14,18 +13,15 @@ import java.util.Map;
 
 @FeignClient(name = "yo-sales", url = "${feign.yosales.uri}")
 public interface YosalesFeign {
-    @GetMapping("/api/billing-configurations/{productId}/gateway/{paymentGateway}")
-    BillingConfigurationDto getBillingInfoByproductIdAndGateway (@RequestHeader("Authorization") String token, @PathVariable("productId") String productId, @PathVariable("paymentGateway") String paymentgateway);
+    /**
+     * Audit P3: credentials of a product for a gateway, on the route reserved to this service account. The admin route
+     * ({@code /{productId}/gateway/{gw}}) answered 403 to this service and now masks the secrets.
+     */
+    @GetMapping("/api/billing-configurations/product/{productId}/gateway/{paymentGateway}/credentials")
+    Map<String, Object> getCredentialsByProductAndGateway(@RequestHeader("Authorization") String token, @PathVariable("productId") Long productId, @PathVariable("paymentGateway") String paymentgateway);
     @GetMapping("/api/billing-configurations/by-invoice/{invoiceId}/{paymentGateway}")
     Map<String,Object> getBillingInfoByInvoiceIdAndGateway (@RequestHeader("Authorization") String token, @PathVariable("invoiceId") Long invoiceId, @PathVariable("paymentGateway") String paymentgateway);
-    @PostMapping("/api/invoices/{invoiceId}/mark-payed")
-    void markInvoicePaid (@RequestHeader("Authorization") String token, @PathVariable("invoiceId") Long invoiceId);
-    @PostMapping("/api/invoices/{invoiceId}/mark-refunded")
-    void markInvoiceRefunded(
-            @RequestHeader("Authorization") String token,
-            @PathVariable("invoiceId") Long invoiceId
-    );
-
+    // No "mark paid" call: an invoice is paid only through the confirmation below, with the amount verified at the gateway.
 
     /** SUB-10: confirmation with the amount verified at the gateway (service account only). Idempotent on YoSales. */
     @PostMapping("/api/payments/confirmations")

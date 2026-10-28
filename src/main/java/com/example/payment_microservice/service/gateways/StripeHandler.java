@@ -3,7 +3,6 @@ package com.example.payment_microservice.service.gateways;
 import com.example.payment_microservice.domain.CardSetup;
 import com.example.payment_microservice.domain.PaymentTransaction;
 import com.example.payment_microservice.dto.SavedCardDto;
-import com.example.payment_microservice.dto.BillingConfigurationDto;
 import com.example.payment_microservice.dto.PaymentConfirmationRequest;
 import com.example.payment_microservice.dto.PaymentRequestDto;
 import com.example.payment_microservice.dto.PaymentResponseDto;
@@ -13,7 +12,6 @@ import com.example.payment_microservice.service.PaymentGatewayHandler;
 import com.example.payment_microservice.service.TokenService;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.stripe.Stripe;
 import com.stripe.exception.CardException;
 import com.stripe.exception.SignatureVerificationException;
 import com.stripe.exception.StripeException;
@@ -31,7 +29,6 @@ import com.stripe.param.checkout.SessionCreateParams;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
@@ -44,6 +41,9 @@ import java.util.Optional;
 @RequiredArgsConstructor
 @Slf4j
 public class StripeHandler implements PaymentGatewayHandler {
+
+    /** Gateway type of the transactions this handler created; it never touches another one. */
+    public static final String GATEWAY = "STRIPE";
 
     private final PaymentTransactionRepository paymentTransactionRepository;
     private final YosalesFeign yosalesFeign;
@@ -64,7 +64,6 @@ public class StripeHandler implements PaymentGatewayHandler {
                     ? request.getFailUrl()
                     : "http://localhost:4200";
             validateRequest(request);
-            Stripe.apiKey = request.getApiKey();
             String currency = request.getCurrency() != null ? request.getCurrency().toLowerCase() : "usd";
             // SUB-61: YoSales sends the exact amount in minor units of the invoice currency (cents for USD).
             long amountInCents = amountInMinorUnits(request);
@@ -96,29 +95,31 @@ public class StripeHandler implements PaymentGatewayHandler {
                     );
             saveCardFor(sessionBuilder, request);
 
-            Session session = Session.create(sessionBuilder.build());
+            // Audit P6: the key of this product is passed with the call, never set for the whole service.
+            StartedSession session = startCheckoutSession(request.getApiKey(), sessionBuilder.build());
 
-            log.info("Stripe session created: sessionId={}, url={}", session.getId(), session.getUrl());
+            log.info("Stripe session created: sessionId={}, url={}", session.id(), session.url());
             PaymentTransaction paymentTransaction = PaymentTransaction.builder()
                     .paymentId(request.getPaymentId())
-                    .transactionId(session.getId())
-                    .gatewayType("STRIPE")
+                    .transactionId(session.id())
+                    .gatewayType(GATEWAY)
                     .status("PENDING")
                     .amount(BigDecimal.valueOf(amountInCents, 2))
                     .amountMillimes(amountInCents)
                     .currency(request.getCurrency() != null ? request.getCurrency().toUpperCase() : "USD")
                     .description(request.getDescription())
                     .invoiceId(request.getInvoiceId())
+                    .returnUrl(request.getReturnUrl())
                     .customerId(request.getUserId())
                     .build();
 
            PaymentTransaction paymentTransaction1= paymentTransactionRepository.save(paymentTransaction);
             log.info("Payment transaction saved: paymentId={}, transactionId={}, invoiceId={}",
-                    request.getPaymentId(), session.getId(), request.getInvoiceId());
+                    request.getPaymentId(), session.id(), request.getInvoiceId());
 
             return new PaymentResponseDto(
                     paymentTransaction1.getTransactionId(),
-                    session.getUrl(),
+                    session.url(),
                     "PENDING",
                     "Redirect to Stripe Checkout"
             );
@@ -135,20 +136,32 @@ public class StripeHandler implements PaymentGatewayHandler {
     /**
      * Validate payment request
      */
+    /**
+     * Audit P7: "sandbox" or "test" (any case) = test keys only; anything else, typos included, = live keys only. A
+     * mode that is not recognised never turns the check off.
+     */
+    boolean sandboxMode() {
+        String value = mode == null ? "" : mode.trim();
+        return "sandbox".equalsIgnoreCase(value) || "test".equalsIgnoreCase(value);
+    }
+
+    void requireKeyOfMode(String apiKey) {
+        if (apiKey == null || apiKey.isEmpty()) {
+            throw new IllegalArgumentException("Stripe secret key is required");
+        }
+        if (sandboxMode() && !apiKey.startsWith("sk_test_")) {
+            throw new IllegalArgumentException("Test mode requires Test API keys");
+        }
+        if (!sandboxMode() && !apiKey.startsWith("sk_live_")) {
+            throw new IllegalArgumentException("Live mode requires live API key");
+        }
+    }
+
     private void validateRequest(PaymentRequestDto request) {
         if (request.getApiKey() == null || request.getApiKey().isEmpty()) {
             throw new IllegalArgumentException("Stripe secret key is required");
         }
-        boolean isTestKey = request.getApiKey().startsWith("sk_test_");
-        boolean isLiveKey = request.getApiKey().startsWith("sk_live_");
-
-        if ("live".equals(mode) && !isLiveKey) {
-            throw new IllegalArgumentException("Live mode requires live API key");
-        }
-        if ("sandbox".equals(mode) && !isTestKey) {
-            throw new IllegalArgumentException("Test mode requires Test API keys");
-
-        }
+        requireKeyOfMode(request.getApiKey());
         if (request.getPaymentId() == null) {
             throw new IllegalArgumentException("paymentId is required");
         }
@@ -165,66 +178,80 @@ public class StripeHandler implements PaymentGatewayHandler {
     }
 
     @Override
-    @Async
     public void handleWebhook(String payload) {
-        handleWebhook(payload, null,null);
+        handleWebhook(payload, null, null);
     }
 
     /**
-     * Handle Stripe webhook with signature verification
+     * A Stripe webhook, checked with the signing secret of the product. Audit P5 (2026-10-26): handled while Stripe
+     * waits for the answer, and a failure is thrown (answered 500) so that Stripe sends the event again; a repeat is
+     * harmless (the session is read again, YoSales ignores a confirmation it already applied).
      */
-    /**
-     * Handle Stripe webhook with signature verification
-     */
-    public void handleWebhook(String payload, String stripeSignature,Long productId) {
-        try {
-            BillingConfigurationDto config = this.yosalesFeign.getBillingInfoByproductIdAndGateway("Bearer "+tokenService.getServiceAccountToken(), String.valueOf(productId),"STRIPE");
-            log.info("Stripe webhook received");
-            String webhokSecret =  (String) config.getConfigParams().get("webhookSecret");
-            // SUB-61: never trust an unsigned webhook (anyone could post a fake "paid" event).
-            if (stripeSignature == null || webhokSecret == null || webhokSecret.isBlank()) {
-                log.error("Stripe webhook rejected: missing signature or webhook secret");
-                return;
-            }
-            if (!verifyWebhookSignature(payload, stripeSignature, webhokSecret)) {
-                log.error("Invalid Stripe webhook signature - rejecting event");
-                return;
-            }
-            JsonNode eventJson = objectMapper.readTree(payload);
-            String eventType = eventJson.get("type").asText();
-
-            log.info("Processing Stripe event: {}", eventType);
-
-            switch (eventType) {
-                // SUB-61: whatever the event says, the session is read again at Stripe and the result is confirmed to
-                // YoSales by the single confirmation path (amount and currency checked there).
-                case "checkout.session.completed", "checkout.session.async_payment_succeeded",
-                     "checkout.session.async_payment_failed", "checkout.session.expired" -> sessionEvent(eventJson);
-                // SUB-62: a saved card charged without the coach (the PaymentIntent is the transaction).
-                case "payment_intent.succeeded", "payment_intent.payment_failed", "payment_intent.canceled" -> paymentIntentEvent(eventJson);
-                case "charge.refunded" -> handleChargeRefunded(eventJson);
-                default -> log.info("Unhandled Stripe event type: {}", eventType);
-            }
-
-        } catch (Exception e) {
-            log.error("Error processing Stripe webhook", e);
+    @Override
+    public WebhookOutcome handleWebhook(String payload, String stripeSignature, Long productId) {
+        if (stripeSignature == null || stripeSignature.isBlank()) {
+            // Checked first: an unsigned post costs nothing (no token asked, no call to YoSales).
+            log.error("Stripe webhook rejected: missing signature");
+            return WebhookOutcome.REJECTED;
         }
+        // Audit P3: the route reserved to this service account (the admin one answered 403 and masks the keys).
+        Map<String, Object> credentials = this.yosalesFeign.getCredentialsByProductAndGateway(
+                "Bearer " + tokenService.getServiceAccountToken(), productId, GATEWAY);
+        log.info("Stripe webhook received");
+        String webhokSecret = credentials == null ? null : (String) credentials.get("webhookSecret");
+        // SUB-61: never trust an unsigned webhook (anyone could post a fake "paid" event).
+        if (webhokSecret == null || webhokSecret.isBlank()) {
+            log.error("Stripe webhook rejected: no webhook secret for product {}", productId);
+            return WebhookOutcome.REJECTED;
+        }
+        if (!verifyWebhookSignature(payload, stripeSignature, webhokSecret)) {
+            log.error("Invalid Stripe webhook signature - rejecting event");
+            return WebhookOutcome.REJECTED;
+        }
+        JsonNode eventJson;
+        try {
+            eventJson = objectMapper.readTree(payload);
+        } catch (com.fasterxml.jackson.core.JsonProcessingException unreadable) {
+            log.error("Stripe webhook rejected: unreadable payload");
+            return WebhookOutcome.REJECTED;
+        }
+        String eventType = eventJson.get("type").asText();
+
+        log.info("Processing Stripe event: {}", eventType);
+
+        switch (eventType) {
+            // SUB-61: whatever the event says, the session is read again at Stripe and the result is confirmed to
+            // YoSales by the single confirmation path (amount and currency checked there).
+            case "checkout.session.completed", "checkout.session.async_payment_succeeded",
+                 "checkout.session.async_payment_failed", "checkout.session.expired" -> sessionEvent(eventJson);
+            // SUB-62: a saved card charged without the coach (the PaymentIntent is the transaction).
+            case "payment_intent.succeeded", "payment_intent.payment_failed", "payment_intent.canceled" -> paymentIntentEvent(eventJson);
+            case "charge.refunded" -> handleChargeRefunded(eventJson);
+            default -> log.info("Unhandled Stripe event type: {}", eventType);
+        }
+        return WebhookOutcome.HANDLED;
     }
 
     private void sessionEvent(JsonNode eventJson) {
-        try {
-            String sessionId = eventJson.get("data").get("object").get("id").asText();
-            Optional<PaymentTransaction> payment = paymentTransactionRepository.findByTransactionId(sessionId);
-            if (payment.isPresent()) {
-                verifyAndConfirm(payment.get());
-                return;
-            }
-            // SUB-62: a session where the coach saved a new card.
-            cardSetups.findBySessionId(sessionId).ifPresentOrElse(
-                    this::verifyCardSetup,
-                    () -> log.warn("Transaction not found for Stripe session: {}", sessionId));
-        } catch (Exception e) {
-            log.error("Error handling Stripe session event", e);
+        String sessionId = eventJson.get("data").get("object").get("id").asText();
+        Optional<PaymentTransaction> payment = paymentTransactionRepository.findByTransactionId(sessionId);
+        if (payment.isPresent()) {
+            requireDelivered(verifyAndConfirm(payment.get()), sessionId);
+            return;
+        }
+        // SUB-62: a session where the coach saved a new card.
+        cardSetups.findBySessionId(sessionId).ifPresentOrElse(
+                this::verifyCardSetup,
+                () -> log.warn("Transaction not found for Stripe session: {}", sessionId));
+    }
+
+    /**
+     * Audit P5: paid at Stripe but YoSales did not get the confirmation (VERIFIED): the webhook fails so that Stripe
+     * sends it again, on top of the reconciliation of YoSales.
+     */
+    private static void requireDelivered(String status, String transactionId) {
+        if ("VERIFIED".equals(status)) {
+            throw new IllegalStateException("Stripe payment " + transactionId + " is paid but not confirmed to YoSales yet");
         }
     }
 
@@ -314,8 +341,16 @@ public class StripeHandler implements PaymentGatewayHandler {
      * REJECTED are final. Safe to repeat.
      */
     String verifyAndConfirm(PaymentTransaction tx) {
+        if (!GATEWAY.equals(tx.getGatewayType())) {
+            // A Stripe event naming another gateway's transaction: ignored, never confirmed.
+            log.warn("Stripe verification refused for transaction {} of gateway {}", tx.getTransactionId(), tx.getGatewayType());
+            return tx.getStatus();
+        }
         if ("COMPLETED".equals(tx.getStatus()) || "REJECTED".equals(tx.getStatus())) {
             return tx.getStatus();
+        }
+        if (tx.getTransactionId() != null && tx.getTransactionId().startsWith(UNKNOWN_OUTCOME)) {
+            return tx.getStatus(); // audit 2026-10-26: its PaymentIntent is not known yet; its webhook names it
         }
         try {
             Map<String, Object> credentials = yosalesFeign.getBillingInfoByInvoiceIdAndGateway(
@@ -432,10 +467,34 @@ public class StripeHandler implements PaymentGatewayHandler {
         metadata.put("userId", request.getUserId());
         String description = request.getDescription() != null ? request.getDescription() : "Invoice #" + request.getInvoiceId();
 
+        // Review 2026-10-26: charged with the key of the invoice's product, read from YoSales. A key sent by the caller
+        // (its own Stripe account) must never turn into a confirmed YoSales invoice.
+        String productKey = productKeyOfInvoice(request.getInvoiceId());
+        if (!productKey.equals(request.getApiKey())) {
+            throw new IllegalArgumentException("The Stripe key is not the one of the product of invoice " + request.getInvoiceId());
+        }
         OffSessionCharge charge;
         try {
-            charge = chargeAtStripe(request.getApiKey(), amount, currency.toLowerCase(), request.getProviderCustomerId(),
+            charge = chargeAtStripe(productKey, amount, currency.toLowerCase(), request.getProviderCustomerId(),
                     request.getProviderPaymentMethodId(), description, metadata, "yosales-payment-" + request.getPaymentId());
+        } catch (com.stripe.exception.ApiConnectionException | com.stripe.exception.ApiException unknownOutcome) {
+            // Audit 2026-10-26: no answer, or an error of Stripe itself, after the charge was sent: the card may have been
+            // charged. Kept PENDING (never "refused", which made YoSales charge it again): its webhook
+            // (payment_intent.*, found by the paymentId of its metadata) confirms the result.
+            log.error("Stripe gave no clear answer for the saved card of payment {}: waiting for its webhook", request.getPaymentId(), unknownOutcome);
+            paymentTransactionRepository.save(PaymentTransaction.builder()
+                    .paymentId(request.getPaymentId())
+                    .transactionId(UNKNOWN_OUTCOME + request.getPaymentId())
+                    .gatewayType(GATEWAY)
+                    .status("PENDING")
+                    .amount(BigDecimal.valueOf(amount, 2))
+                    .amountMillimes(amount)
+                    .currency(currency)
+                    .description(description)
+                    .invoiceId(request.getInvoiceId())
+                    .customerId(request.getUserId())
+                    .build());
+            return new PaymentResponseDto(null, null, "PENDING", "Stripe did not answer: the result comes with its webhook");
         } catch (StripeException e) {
             log.error("Stripe could not charge the saved card for payment {}", request.getPaymentId(), e);
             throw new Exception("Error charging the saved card: " + e.getMessage(), e);
@@ -443,7 +502,7 @@ public class StripeHandler implements PaymentGatewayHandler {
         PaymentTransaction tx = paymentTransactionRepository.save(PaymentTransaction.builder()
                 .paymentId(request.getPaymentId())
                 .transactionId(charge.paymentIntentId() != null ? charge.paymentIntentId() : "declined-" + request.getPaymentId())
-                .gatewayType("STRIPE")
+                .gatewayType(GATEWAY)
                 .status("PENDING")
                 .amount(BigDecimal.valueOf(amount, 2))
                 .amountMillimes(amount)
@@ -455,6 +514,17 @@ public class StripeHandler implements PaymentGatewayHandler {
         String status = apply(tx, charge.state());
         log.info("Saved card charged for payment {} (invoice {}): {}", request.getPaymentId(), request.getInvoiceId(), status);
         return new PaymentResponseDto(tx.getTransactionId(), null, status, tx.getFailureReason());
+    }
+
+    /** The Stripe secret key of the product of the invoice, as YoSales stores it. */
+    private String productKeyOfInvoice(Long invoiceId) {
+        Map<String, Object> credentials = yosalesFeign.getBillingInfoByInvoiceIdAndGateway(
+                "Bearer " + tokenService.getServiceAccountToken(), invoiceId, GATEWAY);
+        Object apiKey = credentials == null ? null : credentials.get("apiKey");
+        if (apiKey == null || apiKey.toString().isBlank()) {
+            throw new IllegalStateException("Stripe credentials missing for invoice " + invoiceId);
+        }
+        return apiKey.toString();
     }
 
     /** Creates and confirms the PaymentIntent of a saved card at Stripe (overridden in tests). */
@@ -498,6 +568,7 @@ public class StripeHandler implements PaymentGatewayHandler {
         if (request.getApiKey() == null || request.getApiKey().isBlank()) {
             throw new IllegalArgumentException("Stripe secret key is required");
         }
+        requireKeyOfMode(request.getApiKey());
         if (request.getSubscriptionId() == null || request.getProductId() == null) {
             throw new IllegalArgumentException("subscriptionId and productId are required");
         }
@@ -538,6 +609,17 @@ public class StripeHandler implements PaymentGatewayHandler {
         return Customer.create(params.build(), RequestOptions.builder().setApiKey(apiKey).build()).getId();
     }
 
+    /** Starts the Checkout Session of a payment, with the key of the product (overridden in tests). */
+    protected StartedSession startCheckoutSession(String apiKey, SessionCreateParams params) throws StripeException {
+        Session session = Session.create(params, RequestOptions.builder().setApiKey(apiKey).build());
+        return new StartedSession(session.getId(), session.getUrl());
+    }
+
+    /** The Stripe account of a key (overridden in tests). */
+    protected Account retrieveAccount(String apiKey) throws StripeException {
+        return Account.retrieve(RequestOptions.builder().setApiKey(apiKey).build());
+    }
+
     /** Starts the Checkout Session in setup mode (overridden in tests). */
     protected StartedSession startSetupSession(String apiKey, String customer, String successUrl, String cancelUrl,
                                                Map<String, String> metadata) throws StripeException {
@@ -559,9 +641,8 @@ public class StripeHandler implements PaymentGatewayHandler {
         }
         String token = "Bearer " + tokenService.getServiceAccountToken();
         try {
-            BillingConfigurationDto config = yosalesFeign.getBillingInfoByproductIdAndGateway(token,
-                    String.valueOf(setup.getProductId()), "STRIPE");
-            Object apiKey = config == null || config.getConfigParams() == null ? null : config.getConfigParams().get("apiKey");
+            Map<String, Object> credentials = yosalesFeign.getCredentialsByProductAndGateway(token, setup.getProductId(), GATEWAY);
+            Object apiKey = credentials == null ? null : credentials.get("apiKey");
             if (apiKey == null) {
                 throw new IllegalStateException("Stripe credentials missing for product " + setup.getProductId());
             }
@@ -575,8 +656,10 @@ public class StripeHandler implements PaymentGatewayHandler {
                     setup.setStatus("REJECTED");
                     setup.setFailureReason("YoSales refused the card: " + refused.contentUTF8());
                     log.error("YoSales refused the card of setup {}: {}", setup.getSessionId(), refused.contentUTF8());
-                } catch (Exception e) {
+                } catch (RuntimeException e) {
+                    // Audit P5: nothing changed here; the webhook fails so that Stripe sends the event again.
                     log.error("Could not send the card of setup {} to YoSales, it will be sent again", setup.getSessionId(), e);
+                    throw e;
                 }
             } else if ("expired".equals(state.status())) {
                 setup.setStatus("FAILED");
@@ -607,14 +690,32 @@ public class StripeHandler implements PaymentGatewayHandler {
 
     /** SUB-62: a PaymentIntent of a saved card changed; one of a payment by link is handled by its session. */
     private void paymentIntentEvent(JsonNode eventJson) {
-        try {
-            String paymentIntentId = eventJson.get("data").get("object").get("id").asText();
-            paymentTransactionRepository.findByTransactionId(paymentIntentId).ifPresentOrElse(
-                    this::verifyAndConfirm,
-                    () -> log.debug("PaymentIntent {} belongs to a Checkout Session: handled with the session", paymentIntentId));
-        } catch (Exception e) {
-            log.error("Error handling Stripe payment intent event", e);
+        JsonNode intent = eventJson.get("data").get("object");
+        String paymentIntentId = intent.get("id").asText();
+        Optional<PaymentTransaction> tx = paymentTransactionRepository.findByTransactionId(paymentIntentId);
+        if (tx.isEmpty()) {
+            tx = chargeWithUnknownOutcome(intent, paymentIntentId);
         }
+        tx.ifPresentOrElse(
+                found -> requireDelivered(verifyAndConfirm(found), paymentIntentId),
+                () -> log.debug("PaymentIntent {} belongs to a Checkout Session: handled with the session", paymentIntentId));
+    }
+
+    /** Audit 2026-10-26: a charge whose answer was lost at the time (see chargeSavedCard) is recognised by its paymentId. */
+    static final String UNKNOWN_OUTCOME = "unknown-";
+
+    private Optional<PaymentTransaction> chargeWithUnknownOutcome(JsonNode intent, String paymentIntentId) {
+        JsonNode paymentId = intent.path("metadata").path("paymentId");
+        if (paymentId.isMissingNode() || !paymentId.asText().matches("\\d+")) {
+            return Optional.empty();
+        }
+        return paymentTransactionRepository.findByPaymentId(Long.valueOf(paymentId.asText()))
+                .filter(t -> t.getTransactionId() != null && t.getTransactionId().startsWith(UNKNOWN_OUTCOME))
+                .map(t -> {
+                    t.setTransactionId(paymentIntentId);
+                    log.info("Saved card charge of payment {} found at Stripe: {}", t.getPaymentId(), paymentIntentId);
+                    return paymentTransactionRepository.save(t);
+                });
     }
 
     private void handleChargeRefunded(JsonNode eventJson) {
@@ -637,10 +738,16 @@ public class StripeHandler implements PaymentGatewayHandler {
             log.warn("Stripe secret key is missing");
             return false;
         }
+        try {
+            requireKeyOfMode(secretKey); // a test key saved on a live service would make every payment fail
+        } catch (IllegalArgumentException wrongMode) {
+            log.warn("Stripe key refused: {}", wrongMode.getMessage());
+            return false;
+        }
 
         try {
-            Stripe.apiKey = secretKey;
-            Account account = Account.retrieve();
+            // Audit P6: never set as the key of the whole service (a payment running at the same time would use it).
+            Account account = retrieveAccount(secretKey);
 
             log.info("Stripe credentials verified successfully for account: {}", account.getId());
             return account.getId() != null;

@@ -76,7 +76,6 @@ class StripeConfirmationTest {
         assertThat(body.getValue().getAmountMillimes()).isEqualTo(1700L);
         assertThat(body.getValue().getCurrency()).isEqualTo("USD");
         assertThat(body.getValue().getPaymentId()).isEqualTo(44L);
-        verify(yosales, never()).markInvoicePaid(anyString(), any());
     }
 
     @Test
@@ -107,16 +106,17 @@ class StripeConfirmationTest {
 
     @Test
     void anUnsignedWebhookIsIgnored() {
-        com.example.payment_microservice.dto.BillingConfigurationDto config = mock(com.example.payment_microservice.dto.BillingConfigurationDto.class);
-        when(config.getConfigParams()).thenReturn(Map.of("webhookSecret", "whsec_test"));
-        when(yosales.getBillingInfoByproductIdAndGateway(anyString(), anyString(), eq("STRIPE"))).thenReturn(config);
+        when(yosales.getCredentialsByProductAndGateway(anyString(), eq(8L), eq("STRIPE")))
+                .thenReturn(Map.of("webhookSecret", "whsec_test"));
         String fakePaid = "{\"type\":\"checkout.session.completed\",\"data\":{\"object\":{\"id\":\"cs_test_44\",\"payment_status\":\"paid\"}}}";
 
-        handler.handleWebhook(fakePaid, null, 8L);
-        handler.handleWebhook(fakePaid, "t=1,v1=forged", 8L);
+        assertThat(handler.handleWebhook(fakePaid, null, 8L)).isEqualTo(StripeHandler.WebhookOutcome.REJECTED);
+        assertThat(handler.handleWebhook(fakePaid, "t=1,v1=forged", 8L)).isEqualTo(StripeHandler.WebhookOutcome.REJECTED);
 
         verify(yosales, never()).confirmPayment(anyString(), any());
-        verify(yosales, never()).markInvoicePaid(anyString(), any());
+        // Audit P3: the webhook secret is read on the route of the service account, for the product of the webhook;
+        // only for the signed post (the unsigned one is dropped before any call).
+        verify(yosales, org.mockito.Mockito.times(1)).getCredentialsByProductAndGateway(anyString(), eq(8L), eq("STRIPE"));
         assertThat(tx.getStatus()).isEqualTo("PENDING");
     }
 }

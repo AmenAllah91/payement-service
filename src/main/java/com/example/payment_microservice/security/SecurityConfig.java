@@ -21,6 +21,7 @@ import static org.springframework.security.config.http.SessionCreationPolicy.STA
 public class SecurityConfig {
 
     private final JwtAuthConverter jwtAuthConverter;
+    private final AllowedClients allowedClients;
 
     @Value("${cors.allowedMethods}")
     private String allowedMethods;
@@ -31,11 +32,25 @@ public class SecurityConfig {
     @Value("${cors.corsConfiguration}")
     private String corsConfiguration;
 
+    /**
+     * Audit P14 (2026-10-26): the origins allowed to call the service from a browser, comma separated. None by
+     * default: YoSales calls it from its server and the coach only comes back by the return links (no CORS). The
+     * mapping without origins used to allow every origin.
+     */
+    @Value("${PAYMENT_CORS_ORIGINS:}")
+    private String allowedOrigins;
+
     @Bean
     public WebMvcConfigurer corsConfigurer() {
         return new WebMvcConfigurer() {
             public void addCorsMappings(final CorsRegistry registry) {
+                String[] origins = java.util.Arrays.stream(allowedOrigins.split(",")).map(String::trim)
+                        .filter(o -> !o.isEmpty()).toArray(String[]::new);
+                if (origins.length == 0) {
+                    return;
+                }
                 registry.addMapping(corsConfiguration)
+                        .allowedOrigins(origins)
                         .allowedHeaders(allowedHeaders.split(","))
                         .allowedMethods(allowedMethods.split(","));
             }
@@ -54,23 +69,21 @@ public class SecurityConfig {
                 .jwt()
                 .jwtAuthenticationConverter(jwtAuthConverter);
 
+        // Audit P14 (2026-10-26): what was left from a template is gone: the browser login (oauth2Login) with its logout
+        // to localhost, and the public routes of pages that do not exist here (user registration, /oauth2, /index.html).
+        // Only the bearer tokens of the service accounts are accepted, plus the webhooks and return links.
         http
                 .authorizeHttpRequests()
                 .requestMatchers(
-                        "/api/webhooks/**", // ✅ public webhook
-                        "/unauthenticated",
-                        "/oauth2/**",
-                        "/index.html",
+                        "/api/webhooks/**", // public: webhooks and return links of the gateways
                         "/v3/api-docs/**",
                         "/swagger-ui/**",
-                        "/swagger-ui/index.html",
-                        "/api/user/register"
+                        "/swagger-ui/index.html"
                 ).permitAll()
-                .anyRequest().authenticated()
-                .and()
-                .oauth2Login(withDefaults())
-                .logout()
-                .logoutSuccessUrl("http://localhost:9081/realms/coach-app/protocol/openid-connect/logout?redirect_uri=http://localhost:8080/");
+                // Audit P2: the payment routes, for the allowed service accounts only (when the list is set).
+                .requestMatchers("/api/payments/**").access((authentication, context) ->
+                        new org.springframework.security.authorization.AuthorizationDecision(allowedClients.allows(authentication.get())))
+                .anyRequest().authenticated();
 
         return http.build();
     }

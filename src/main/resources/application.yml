@@ -5,6 +5,10 @@ app:
   name: payment-ms
   # SUB-10: YoCoach front-end where the coach lands after a Flouci payment
   frontend-url: ${APP_FRONTEND_URL:http://localhost:4200}
+  # Audit P2: Keycloak clients (azp) allowed on /api/payments/**, comma separated (the YoSales client). Empty = any
+  # signed-in caller, as before: set it once every caller goes through YoSales.
+  security:
+    allowed-clients: ${PAYMENT_ALLOWED_CLIENTS:}
   realm: yo-sales
   client-id: payment-ms
   client-secret: JfSiRh5NykLVHdnXUJKADguO3Uz73s4X
@@ -22,7 +26,7 @@ spring:
   jpa:
     hibernate:
       ddl-auto: update
-    show-sql: true
+    show-sql: ${PAYMENT_SHOW_SQL:false}
     properties:
       hibernate:
         dialect: org.hibernate.dialect.PostgreSQLDialect
@@ -73,15 +77,9 @@ feign:
 
 payment:
   webhook-url: https://postpuberty-trigonometric-bev.ngrok-free.dev
-  konnect:
-    baseUrl: https://api.konnect.network/api/v2/
-
-
-  paypal:
-    mode: live
-
   stripe:
-    mode: live
+    # live = sk_live_ keys only, sandbox = sk_test_ keys only (audit P7: set PAYMENT_STRIPE_MODE=sandbox on integration).
+    mode: ${PAYMENT_STRIPE_MODE:live}
 
   flouci:
     baseUrl: https://developers.flouci.com/api/v2

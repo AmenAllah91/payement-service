@@ -12,8 +12,6 @@ import org.springframework.stereotype.Component;
 @ConfigurationProperties(prefix = "payment")
 public class PaymentProperties {
   private final Stripe stripe = new Stripe();
-  private final Paypal paypal = new Paypal();
-  private final Konnect konnect = new Konnect();
   private final Flouci flouci = new Flouci();
 
   @Data public static class Stripe {
@@ -21,20 +19,6 @@ public class PaymentProperties {
     private String webhookSecret;
     private String successUrl;
     private String cancelUrl;
-  }
-  @Data public static class Paypal {
-    private String clientId;
-    private String clientSecret;
-    private String mode;
-    private String successUrl;
-    private String cancelUrl;
-  }
-  @Data public static class Konnect {
-    private String baseUrl;
-    private String apiKey;
-    private String walletId;
-    private String successUrl;
-    private String failUrl;
   }
   @Data public static class Flouci {
     private String baseUrl = "https://developers.flouci.com/api/v2";

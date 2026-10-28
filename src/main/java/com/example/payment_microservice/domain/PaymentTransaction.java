@@ -60,6 +60,10 @@ public class PaymentTransaction {
     @Column
     private String failureReason;
 
+    /** Audit MP5: the front of the product of this payment (empty = the default address of the service). */
+    @Column
+    private String returnUrl;
+
     @Column(nullable = false, updatable = false)
     private LocalDateTime createdAt;
 

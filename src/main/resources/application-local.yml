@@ -74,12 +74,6 @@ payment:
   stripe:
     mode: sandbox
 
-  paypal:
-    mode: sandbox
-
-  konnect:
-    baseUrl: https://api.sandbox.konnect.network/api/v2
-
   flouci:
     baseUrl: https://developers.flouci.com/api/v2
 
